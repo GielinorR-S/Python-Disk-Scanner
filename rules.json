@@ -1,0 +1,58 @@
+[
+  {
+    "category": "Dependency Cache",
+    "relevance": "Project",
+    "description": "Node.js dependencies (regenerates via npm/yarn).",
+    "action": "Safe to delete",
+    "confidence": 95,
+    "match": "node_modules"
+  },
+  {
+    "category": "Dependency Cache",
+    "relevance": "Project",
+    "description": "Python virtual environment packages.",
+    "action": "Safe if rebuildable",
+    "confidence": 90,
+    "match": "\\\\.venv\\\\|site-packages"
+  },
+  {
+    "category": "Build Output",
+    "relevance": "Generated",
+    "description": "Compiled build output (recreated by rebuilding).",
+    "action": "Safe if rebuildable",
+    "confidence": 90,
+    "match": "\\\\dist\\\\|\\\\build\\\\|\\\\out\\\\|\\\\target\\\\"
+  },
+  {
+    "category": "Installer",
+    "relevance": "Temporary",
+    "description": "Software installer package.",
+    "action": "Safe to delete",
+    "confidence": 80,
+    "match": "\\.exe$|\\.msi$"
+  },
+  {
+    "category": "Archive",
+    "relevance": "User Data",
+    "description": "Compressed archive file.",
+    "action": "Review before deleting",
+    "confidence": 70,
+    "match": "\\.zip$|\\.rar$|\\.7z$"
+  },
+  {
+    "category": "Media",
+    "relevance": "User Data",
+    "description": "Video or media file.",
+    "action": "Review before deleting",
+    "confidence": 60,
+    "match": "\\.mp4$|\\.mkv$|\\.avi$|\\.mov$"
+  },
+  {
+    "category": "Virtual Machine",
+    "relevance": "User Data",
+    "description": "Virtual machine disk image.",
+    "action": "Review before deleting",
+    "confidence": 50,
+    "match": "\\.vdi$|\\.vmdk$|\\.vhdx?$"
+  }
+]
