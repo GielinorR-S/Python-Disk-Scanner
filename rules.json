@@ -1,58 +1,122 @@
 [
   {
-    "category": "Dependency Cache",
-    "relevance": "Project",
-    "description": "Node.js dependencies (regenerates via npm/yarn).",
+    "category": "Node Modules",
+    "description": "Node.js dependencies (can be reinstalled)",
     "action": "Safe to delete",
     "confidence": 95,
-    "match": "node_modules"
+    "match": "node_modules",
+    "icon": "📦"
   },
   {
-    "category": "Dependency Cache",
-    "relevance": "Project",
-    "description": "Python virtual environment packages.",
+    "category": "Python Envs",
+    "description": "Python virtual environments",
     "action": "Safe if rebuildable",
     "confidence": 90,
-    "match": "\\\\.venv\\\\|site-packages"
+    "match": "\\.venv|\\.env|venv",
+    "icon": "🐍"
   },
   {
     "category": "Build Output",
-    "relevance": "Generated",
-    "description": "Compiled build output (recreated by rebuilding).",
+    "description": "Compiled/transpiled code",
     "action": "Safe if rebuildable",
     "confidence": 90,
-    "match": "\\\\dist\\\\|\\\\build\\\\|\\\\out\\\\|\\\\target\\\\"
+    "match": "dist|build|out|target|bin|obj",
+    "icon": "🔨"
   },
   {
-    "category": "Installer",
-    "relevance": "Temporary",
-    "description": "Software installer package.",
-    "action": "Safe to delete",
-    "confidence": 80,
-    "match": "\\.exe$|\\.msi$"
+    "category": "Installers",
+    "description": "Downloaded installer files",
+    "action": "Review before deleting",
+    "confidence": 75,
+    "match": "\\.exe$|\\.msi$|\\.dmg$|\\.pkg$",
+    "icon": "📥"
   },
   {
-    "category": "Archive",
-    "relevance": "User Data",
-    "description": "Compressed archive file.",
+    "category": "Archives",
+    "description": "Compressed files",
     "action": "Review before deleting",
     "confidence": 70,
-    "match": "\\.zip$|\\.rar$|\\.7z$"
+    "match": "\\.zip$|\\.rar$|\\.7z$|\\.tar$|\\.gz$",
+    "icon": "🗜️"
   },
   {
-    "category": "Media",
-    "relevance": "User Data",
-    "description": "Video or media file.",
-    "action": "Review before deleting",
-    "confidence": 60,
-    "match": "\\.mp4$|\\.mkv$|\\.avi$|\\.mov$"
+    "category": "System Cache",
+    "description": "Temporary system files",
+    "action": "Safe to delete",
+    "confidence": 95,
+    "match": "Temp|tmp|\\.tmp$|\\.temp$|\\\\.cache",
+    "icon": "💾"
   },
   {
-    "category": "Virtual Machine",
-    "relevance": "User Data",
-    "description": "Virtual machine disk image.",
+    "category": "Logs",
+    "description": "Application log files",
+    "action": "Safe to delete",
+    "confidence": 85,
+    "match": "\\.log$",
+    "icon": "📝"
+  },
+  {
+    "category": "Browser Cache",
+    "description": "Browser temporary files",
+    "action": "Safe to delete",
+    "confidence": 90,
+    "match": "Cache|Caches|cache2|GPUCache",
+    "icon": "🌐"
+  },
+  {
+    "category": "Backups",
+    "description": "Backup/duplicate files",
     "action": "Review before deleting",
-    "confidence": 50,
-    "match": "\\.vdi$|\\.vmdk$|\\.vhdx?$"
+    "confidence": 75,
+    "match": "\\.bak$|\\.backup$|\\.old$|\\.orig$|~$",
+    "icon": "💾"
+  },
+  {
+    "category": "Package Cache",
+    "description": "Package manager cache",
+    "action": "Safe to delete",
+    "confidence": 85,
+    "match": "\\.npm|\\.pip|\\.cache|yarn-cache",
+    "icon": "📦"
+  },
+  {
+    "category": "IDE Cache",
+    "description": "Editor/IDE cache files",
+    "action": "Safe to delete",
+    "confidence": 80,
+    "match": "\\.idea|\\.vscode|\\.vs|\\.project",
+    "icon": "⚡"
+  },
+  {
+    "category": "Downloads",
+    "description": "Partial downloads",
+    "action": "Safe to delete",
+    "confidence": 90,
+    "match": "\\.crdownload$|\\.part$|\\.download$",
+    "icon": "⬇️"
+  },
+  {
+    "category": "Thumbnails",
+    "description": "Image thumbnail cache",
+    "action": "Safe to delete",
+    "confidence": 95,
+    "match": "Thumbnails|thumbcache_",
+    "icon": "🖼️"
+  },
+  {
+    "category": "Crash Dumps",
+    "description": "Application crash reports",
+    "action": "Safe to delete",
+    "confidence": 95,
+    "match": "\\.dmp$|\\.crash$",
+    "icon": "💥"
+  },
+  {
+    "category": "Media Cache",
+    "description": "Media player cache files",
+    "action": "Safe to delete",
+    "confidence": 85,
+    "match": "\\.cache$|\\.media$",
+    "icon": "🎬"
   }
 ]
