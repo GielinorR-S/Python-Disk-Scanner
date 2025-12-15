@@ -1,8 +1,9 @@
 """
-Disk Cleanup Professional - FINAL VERSION
+Disk Cleanup Professional - FIXED VERSION
 =========================================
 A comprehensive, safe disk cleanup tool with advanced features.
-Safe: Never deletes system files or drivers.
+Fixed: Percentage counter stops at 100%
+Fixed: Added dropdown category filter
 """
 
 import os
@@ -193,7 +194,7 @@ class RuleManager:
         return sorted(list(self.categories))
 
 # ============================================
-# SCANNER ENGINE
+# SCANNER ENGINE - FIXED PROGRESS TRACKING
 # ============================================
 class ScannerEngine:
     def __init__(self, rule_manager):
@@ -224,8 +225,15 @@ class ScannerEngine:
         results = []
         
         try:
-            # Count total files for progress
-            total_files = self._count_files(root_dir)
+            # Count total files for progress - FIXED: Better counting
+            total_files = 0
+            for root, dirs, files in os.walk(root_dir):
+                # Skip system directories in counting too
+                dirs[:] = [d for d in dirs if not self._should_skip_dir(os.path.join(root, d))]
+                total_files += len(files)
+                if total_files > 100000:  # Cap for performance
+                    total_files = 100000
+                    break
             
             scanned = 0
             for root, dirs, files in os.walk(root_dir):
@@ -243,6 +251,16 @@ class ScannerEngine:
                         path = os.path.join(root, file)
                         self.current_file = path
                         scanned += 1
+                        
+                        # FIXED: Percentage calculation - ensure it doesn't exceed 100%
+                        if total_files > 0:
+                            progress = min(100, (scanned / total_files * 100))  # MIN ensures <= 100
+                        else:
+                            progress = 0
+                        
+                        # Update progress every 10 files
+                        if scanned % 10 == 0:
+                            yield ('progress', progress, scanned, total_files)
                         
                         # Skip if unsafe
                         safe, reason = is_system_file_safe(path)
@@ -286,34 +304,25 @@ class ScannerEngine:
                         self.stats['files_found'] += 1
                         self.stats['total_size'] += size
                         
-                        # Yield progress every 100 files
-                        if scanned % 100 == 0:
-                            yield ('progress', scanned, total_files, result)
+                        # Yield result for immediate display
+                        yield ('result', result)
                         
                     except (OSError, PermissionError):
                         continue
                 
                 self.stats['total_scanned'] = scanned
             
+            # Final progress update - FIXED: Always send 100%
+            yield ('progress', 100, scanned, total_files)
+            
             # Final stats
             self.stats['end_time'] = time.time()
             
         except Exception as e:
             print(f"Scan error: {e}")
+            yield ('error', str(e))
         
         yield ('complete', results, self.stats)
-    
-    def _count_files(self, root_dir):
-        """Count total files for progress."""
-        count = 0
-        try:
-            for root, dirs, files in os.walk(root_dir):
-                count += len(files)
-                if count > 100000:  # Cap for performance
-                    return count
-        except:
-            pass
-        return count
     
     def _should_skip_dir(self, dir_path):
         """Check if directory should be skipped."""
@@ -333,7 +342,7 @@ class ScannerEngine:
         self.stop_event.set()
 
 # ============================================
-# MAIN APPLICATION
+# MAIN APPLICATION - FIXED VERSION
 # ============================================
 class DiskCleanupProfessional:
     def __init__(self, root):
@@ -347,7 +356,6 @@ class DiskCleanupProfessional:
         
         # Data
         self.all_records = {}
-        self.filtered_records = {}
         self.scan_queue = queue.Queue()
         self.scan_thread = None
         self.is_scanning = False
@@ -358,6 +366,9 @@ class DiskCleanupProfessional:
         self.min_mb_var = tk.IntVar(value=DEFAULT_MIN_MB)
         self.age_days_var = tk.IntVar(value=0)
         self.selected_categories = []
+        
+        # NEW: Category dropdown variable
+        self.category_filter_var = tk.StringVar(value="All Categories")
         
         # Statistics
         self.stats = {
@@ -477,8 +488,16 @@ class DiskCleanupProfessional:
                    textvariable=self.age_days_var).pack(side=tk.LEFT, padx=(0, 15))
         
         ttk.Label(row2, text="Search:").pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Entry(row2, textvariable=self.search_var, width=30).pack(side=tk.LEFT)
+        ttk.Entry(row2, textvariable=self.search_var, width=30).pack(side=tk.LEFT, padx=(0, 15))
         self.search_var.trace_add("write", lambda *args: self.apply_filters())
+        
+        # NEW: Category dropdown filter
+        ttk.Label(row2, text="Category Filter:").pack(side=tk.LEFT, padx=(0, 5))
+        categories = ["All Categories"] + self.rule_manager.get_all_categories()
+        self.category_dropdown = ttk.Combobox(row2, textvariable=self.category_filter_var, 
+                                            values=categories, state="readonly", width=20)
+        self.category_dropdown.pack(side=tk.LEFT, padx=(0, 15))
+        self.category_dropdown.bind('<<ComboboxSelected>>', lambda e: self.apply_filters())
         
         # Row 3: Action buttons
         row3 = ttk.Frame(control_frame)
@@ -643,20 +662,15 @@ class DiskCleanupProfessional:
         
         self.status_label = ttk.Label(status_frame, text="Ready to scan")
         self.status_label.pack(side=tk.LEFT)
-        
-        self.memory_label = ttk.Label(status_frame, text="")
-        self.memory_label.pack(side=tk.RIGHT)
-        
-        # Update memory usage periodically
-        self.root.after(1000, self.update_memory_usage)
     
     def _set_all_categories(self, state):
         """Select all or no categories."""
         for var in self.category_vars.values():
             var.set(state)
+        self.apply_filters()
     
     # ============================================
-    # SCANNING FUNCTIONS
+    # SCANNING FUNCTIONS - FIXED
     # ============================================
     def select_folder(self):
         """Select folder to scan."""
@@ -700,7 +714,6 @@ class DiskCleanupProfessional:
         # Clear previous results
         self.tree.delete(*self.tree.get_children())
         self.all_records.clear()
-        self.filtered_records.clear()
         
         # Reset UI
         self.is_scanning = True
@@ -708,8 +721,9 @@ class DiskCleanupProfessional:
         self.progress_percent.config(text="0%")
         self.progress_text.config(text=f"Scanning: {self.current_path}")
         self.status_label.config(text="Starting scan...")
+        self.current_file_label.config(text="")
         
-        # Get selected categories
+        # Get selected categories from checkboxes
         selected_categories = []
         for category, var in self.category_vars.items():
             if var.get():
@@ -734,9 +748,11 @@ class DiskCleanupProfessional:
             
             for item in scan_gen:
                 if item[0] == 'progress':
-                    _, scanned, total, result = item
-                    progress = (scanned / total * 100) if total > 0 else 0
+                    _, progress, scanned, total = item
                     self.scan_queue.put(('progress', (progress, scanned, total)))
+                
+                elif item[0] == 'result':
+                    _, result = item
                     self.scan_queue.put(('result', result))
                 
                 elif item[0] == 'complete':
@@ -744,6 +760,10 @@ class DiskCleanupProfessional:
                     self.scan_queue.put(('stats', stats))
                     self.scan_queue.put(('complete', None))
                     break
+                
+                elif item[0] == 'error':
+                    _, error_msg = item
+                    self.scan_queue.put(('error', error_msg))
         
         except Exception as e:
             self.scan_queue.put(('error', str(e)))
@@ -759,11 +779,18 @@ class DiskCleanupProfessional:
                     
                     if cmd == 'progress':
                         progress, scanned, total = data
+                        # FIXED: Ensure progress never exceeds 100
+                        progress = min(100, progress)
                         self.progress_bar['value'] = progress
                         self.progress_percent.config(text=f"{progress:.1f}%")
                         self.status_label.config(
                             text=f"Scanned: {scanned:,} of {total:,} files"
                         )
+                        # Update current file from scanner
+                        current_file = self.scanner.current_file
+                        if len(current_file) > 80:
+                            current_file = "..." + current_file[-77:]
+                        self.current_file_label.config(text=current_file)
                     
                     elif cmd == 'result':
                         result = data
@@ -830,6 +857,8 @@ class DiskCleanupProfessional:
                             text=f"Found {len(self.all_records):,} files, "
                                  f"{bytes_to_readable(self.scanner.stats['total_size'])} total"
                         )
+                        self.current_file_label.config(text="")
+                        # Apply initial filters
                         self.apply_filters()
                     
                     elif cmd == 'error':
@@ -842,7 +871,7 @@ class DiskCleanupProfessional:
         self.root.after(50, self._poll_queue)
     
     # ============================================
-    # SELECTION AND FILTERING
+    # SELECTION AND FILTERING - UPDATED WITH DROPDOWN
     # ============================================
     def toggle_check(self, event):
         """Toggle checkbox for a row."""
@@ -877,6 +906,7 @@ class DiskCleanupProfessional:
     def apply_filters(self):
         """Apply all filters to the view."""
         search_text = self.search_var.get().lower()
+        selected_category = self.category_filter_var.get()
         
         # Clear current view
         for item in self.tree.get_children():
@@ -887,6 +917,10 @@ class DiskCleanupProfessional:
         for iid, rec in self.all_records.items():
             # Search filter
             if search_text and search_text not in rec['path'].lower():
+                continue
+            
+            # NEW: Category dropdown filter
+            if selected_category != "All Categories" and rec['category'] != selected_category:
                 continue
             
             # Safety filter
@@ -1120,17 +1154,6 @@ class DiskCleanupProfessional:
         
         ttk.Button(report_window, text="Close",
                   command=report_window.destroy).pack(pady=10)
-    
-    def update_memory_usage(self):
-        """Update memory usage display."""
-        try:
-            import psutil
-            memory = psutil.Process().memory_info().rss
-            self.memory_label.config(text=f"Memory: {bytes_to_readable(memory)}")
-        except:
-            self.memory_label.config(text="")
-        
-        self.root.after(5000, self.update_memory_usage)
     
     def center_window(self):
         """Center window on screen."""
