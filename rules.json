@@ -118,5 +118,53 @@
     "confidence": 85,
     "match": "\\.cache$|\\.media$",
     "icon": "🎬"
+  },
+  {
+    "category": "Windows Update",
+    "description": "Windows Update temporary files",
+    "action": "Safe to delete",
+    "confidence": 90,
+    "match": "SoftwareDistribution|WindowsUpdate|UpdateCache",
+    "icon": "🔄"
+  },
+  {
+    "category": "Old Logs",
+    "description": "Old application log files",
+    "action": "Safe to delete",
+    "confidence": 90,
+    "match": "logs|Logs|LOG",
+    "icon": "📋"
+  },
+  {
+    "category": "Browser History",
+    "description": "Old browser history files",
+    "action": "Review before deleting",
+    "confidence": 70,
+    "match": "History|history|History2",
+    "icon": "🌍"
+  },
+  {
+    "category": "Empty Folders",
+    "description": "Empty directories",
+    "action": "Safe to delete",
+    "confidence": 95,
+    "match": "^$",
+    "icon": "📁"
+  },
+  {
+    "category": "Recycle Bin",
+    "description": "Recycle Bin contents",
+    "action": "Safe to delete",
+    "confidence": 95,
+    "match": "\\$Recycle\\.Bin",
+    "icon": "🗑️"
+  },
+  {
+    "category": "Windows Temp",
+    "description": "Windows temporary files",
+    "action": "Safe to delete",
+    "confidence": 95,
+    "match": "Windows\\\\Temp|Temporary Internet Files",
+    "icon": "🗂️"
   }
 ]

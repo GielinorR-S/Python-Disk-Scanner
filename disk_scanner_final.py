@@ -1,9 +1,14 @@
 """
-Disk Cleanup Professional - FIXED VERSION
-=========================================
+Disk Cleanup Professional - ENHANCED VERSION
+===========================================
 A comprehensive, safe disk cleanup tool with advanced features.
-Fixed: Percentage counter stops at 100%
-Fixed: Added dropdown category filter
+- One-Click Cleanup for instant space freeing
+- Smart Scan to find biggest space wasters
+- Welcome screen for easy start
+- Enhanced batch selection
+- Disk space visualization
+- Duplicate file detection
+- Export/Import functionality
 """
 
 import os
@@ -14,6 +19,7 @@ import queue
 import threading
 import time
 import shutil
+import hashlib
 from datetime import datetime
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, font
@@ -24,6 +30,7 @@ from collections import defaultdict
 # ============================================
 DEFAULT_MIN_MB = 10
 RULES_FILE = "rules.json"
+PROTECTED_PATHS_FILE = "protected_paths.json"
 
 # NEVER delete these system patterns
 SYSTEM_SAFETY_PATTERNS = [
@@ -96,12 +103,84 @@ def get_file_age_days(path):
     except:
         return 0
 
+# Global protected paths (loaded from file)
+PROTECTED_PATHS = []
+
+def load_protected_paths():
+    """Load protected paths from file."""
+    global PROTECTED_PATHS
+    PROTECTED_PATHS = []
+    
+    if os.path.exists(PROTECTED_PATHS_FILE):
+        try:
+            with open(PROTECTED_PATHS_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                PROTECTED_PATHS = data.get('paths', [])
+        except:
+            pass
+    
+    # Auto-detect common protected locations
+    userprofile = os.environ.get('USERPROFILE', '')
+    desktop = os.path.join(userprofile, 'Desktop') if userprofile else ''
+    
+    # Auto-add Portfolio and OneDrive if they exist
+    auto_protect = []
+    if desktop:
+        # Look for Portfolio folders
+        for item in os.listdir(desktop) if os.path.exists(desktop) else []:
+            item_path = os.path.join(desktop, item)
+            if os.path.isdir(item_path) and 'portfolio' in item.lower():
+                auto_protect.append(item_path)
+        
+        # Look for OneDrive
+        onedrive_paths = [
+            os.path.join(userprofile, 'OneDrive'),
+            os.path.join(userprofile, 'OneDrive - Personal'),
+            os.path.join(userprofile, 'OneDrive - Work'),
+        ]
+        for path in onedrive_paths:
+            if os.path.exists(path) and path not in PROTECTED_PATHS:
+                auto_protect.append(path)
+    
+    # Add auto-detected paths
+    for path in auto_protect:
+        if path not in PROTECTED_PATHS:
+            PROTECTED_PATHS.append(path)
+    
+    # Save updated list
+    save_protected_paths()
+
+def save_protected_paths():
+    """Save protected paths to file."""
+    try:
+        with open(PROTECTED_PATHS_FILE, 'w', encoding='utf-8') as f:
+            json.dump({'paths': PROTECTED_PATHS}, f, indent=2)
+    except:
+        pass
+
+def is_path_protected(path):
+    """Check if path is in protected list."""
+    path_normalized = os.path.normpath(path).lower()
+    
+    for protected in PROTECTED_PATHS:
+        protected_normalized = os.path.normpath(protected).lower()
+        # Check if path is within protected directory
+        if path_normalized.startswith(protected_normalized):
+            return True, f"Protected: {protected}"
+    
+    return False, None
+
 def is_system_file_safe(path):
     """
-    Check if file is SAFE to delete (not a system file).
+    Check if file is SAFE to delete (not a system file or protected).
     Returns: (is_safe, reason)
     """
     path_lower = path.lower()
+    
+    # Check if path is protected (Portfolio, OneDrive, etc.)
+    is_protected, protect_reason = is_path_protected(path)
+    if is_protected:
+        return False, protect_reason
     
     # Check against dangerous patterns
     for pattern in SYSTEM_SAFETY_PATTERNS:
@@ -130,6 +209,479 @@ def get_project_type(path):
             break
     
     return "Unknown"
+
+def get_file_hash(path, chunk_size=8192):
+    """Calculate MD5 hash of a file."""
+    try:
+        hash_md5 = hashlib.md5()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(chunk_size), b""):
+                hash_md5.update(chunk)
+        return hash_md5.hexdigest()
+    except:
+        return None
+
+def get_common_locations():
+    """Get list of common Windows cleanup locations."""
+    locations = []
+    userprofile = os.environ.get('USERPROFILE', '')
+    
+    if sys.platform == "win32":
+        # System temp
+        if os.environ.get('TEMP'):
+            locations.append(os.environ.get('TEMP'))
+        if os.environ.get('TMP'):
+            locations.append(os.environ.get('TMP'))
+        
+        # User temp
+        if userprofile:
+            locations.extend([
+                os.path.join(userprofile, 'AppData', 'Local', 'Temp'),
+                os.path.join(userprofile, 'AppData', 'Local', 'Microsoft', 'Windows', 'INetCache'),
+                os.path.join(userprofile, 'AppData', 'Local', 'Microsoft', 'Windows', 'Temporary Internet Files'),
+                os.path.join(userprofile, 'Downloads'),
+            ])
+            
+            # Browser caches
+            for browser in ['Chrome', 'Firefox', 'Edge', 'Opera']:
+                cache_paths = [
+                    os.path.join(userprofile, 'AppData', 'Local', browser, 'User Data', 'Default', 'Cache'),
+                    os.path.join(userprofile, 'AppData', 'Local', browser, 'Cache'),
+                ]
+                for cache_path in cache_paths:
+                    if os.path.exists(cache_path):
+                        locations.append(cache_path)
+                        break
+    
+    return [loc for loc in locations if loc and os.path.exists(loc)]
+
+# ============================================
+# AI AGENT - Natural Language Command Processor
+# ============================================
+class CleanupAI:
+    """AI agent that understands natural language cleanup commands."""
+    
+    def __init__(self, app_instance):
+        self.app = app_instance
+        self.command_history = []
+        self.conversation_context = []
+        self.user_name = "there"  # Will try to detect from system
+        self.personality_traits = {
+            'helpful': True,
+            'cautious': True,
+            'encouraging': True,
+            'friendly': True
+        }
+        self._detect_user_name()
+    
+    def _detect_user_name(self):
+        """Try to detect user name from system."""
+        try:
+            username = os.environ.get('USERNAME', '')
+            if username:
+                self.user_name = username.split()[0] if ' ' in username else username
+        except:
+            pass
+        
+    def parse_command(self, command):
+        """Parse natural language command and return action."""
+        command_lower = command.lower().strip()
+        
+        # Extract intent
+        intent = self._extract_intent(command_lower)
+        
+        # Extract parameters
+        params = self._extract_parameters(command_lower, intent)
+        
+        return {
+            'intent': intent,
+            'params': params,
+            'original': command
+        }
+    
+    def _extract_intent(self, command):
+        """Extract the main intent from command."""
+        # Delete/Remove/Clean commands
+        if any(word in command for word in ['delete', 'remove', 'clean', 'clear', 'free']):
+            if any(word in command for word in ['all', 'everything']):
+                return 'delete_all_safe'
+            elif any(word in command for word in ['node', 'node_modules', 'npm']):
+                return 'delete_category'
+            elif any(word in command for word in ['temp', 'temporary', 'cache']):
+                return 'delete_category'
+            elif any(word in command for word in ['log', 'logs']):
+                return 'delete_category'
+            elif any(word in command for word in ['duplicate', 'duplicates']):
+                return 'delete_duplicates'
+            elif any(word in command for word in ['old', 'older']):
+                return 'delete_old'
+            elif any(word in command for word in ['large', 'big', 'huge']):
+                return 'delete_large'
+            else:
+                return 'delete_selected'
+        
+        # Find/Search/Show commands
+        elif any(word in command for word in ['find', 'search', 'show', 'list', 'display']):
+            if any(word in command for word in ['duplicate', 'duplicates']):
+                return 'find_duplicates'
+            elif any(word in command for word in ['large', 'big', 'huge']):
+                return 'find_large'
+            elif any(word in command for word in ['old', 'older']):
+                return 'find_old'
+            else:
+                return 'find_files'
+        
+        # Protect/Exclude commands
+        elif any(word in command for word in ['protect', 'exclude', 'ignore', 'never delete', 'keep']):
+            return 'protect_path'
+        
+        # Scan commands
+        elif any(word in command for word in ['scan', 'search for']):
+            return 'scan_location'
+        
+        # Help/Info commands
+        elif any(word in command for word in ['help', 'what can', 'how', 'commands']):
+            return 'show_help'
+        
+        # Stats/Info commands
+        elif any(word in command for word in ['stats', 'statistics', 'summary', 'how much']):
+            return 'show_stats'
+        
+        return 'unknown'
+    
+    def _extract_parameters(self, command, intent):
+        """Extract parameters from command."""
+        params = {}
+        
+        # Extract size (MB, GB)
+        size_match = re.search(r'(\d+)\s*(mb|gb|megabytes?|gigabytes?)', command)
+        if size_match:
+            value = int(size_match.group(1))
+            unit = size_match.group(2).lower()
+            if 'gb' in unit or 'gigabyte' in unit:
+                params['size_mb'] = value * 1024
+            else:
+                params['size_mb'] = value
+        
+        # Extract age (days, weeks, months, years)
+        age_match = re.search(r'(\d+)\s*(day|week|month|year|d|w|m|y)s?', command)
+        if age_match:
+            value = int(age_match.group(1))
+            unit = age_match.group(2).lower()
+            if 'week' in unit or unit == 'w':
+                params['age_days'] = value * 7
+            elif 'month' in unit or unit == 'm':
+                params['age_days'] = value * 30
+            elif 'year' in unit or unit == 'y':
+                params['age_days'] = value * 365
+            else:
+                params['age_days'] = value
+        
+        # Extract category
+        categories = {
+            'node_modules': 'Node Modules',
+            'node': 'Node Modules',
+            'npm': 'Node Modules',
+            'python': 'Python Envs',
+            'venv': 'Python Envs',
+            'temp': 'System Cache',
+            'cache': 'System Cache',
+            'log': 'Logs',
+            'logs': 'Logs',
+            'build': 'Build Output',
+            'dist': 'Build Output',
+        }
+        for key, category in categories.items():
+            if key in command:
+                params['category'] = category
+                break
+        
+        # Extract path (if mentioned)
+        path_patterns = [
+            r'in\s+([a-z]:\\[^\s]+)',
+            r'from\s+([a-z]:\\[^\s]+)',
+            r'at\s+([a-z]:\\[^\s]+)',
+        ]
+        for pattern in path_patterns:
+            match = re.search(pattern, command, re.IGNORECASE)
+            if match:
+                params['path'] = match.group(1)
+                break
+        
+        return params
+    
+    def _get_greeting(self):
+        """Get a friendly greeting."""
+        greetings = [
+            "Hey! 👋 Ready to free up some space?",
+            "Hi there! What can I help you clean up today?",
+            "Hello! Let's get that disk space back! 💪",
+            "Hey! I'm here to help you clean up safely. What do you need?",
+        ]
+        return greetings[len(self.command_history) % len(greetings)]
+    
+    def _get_encouragement(self, action_type, count=0, size=0):
+        """Get encouraging response based on action."""
+        if action_type == 'delete' and count > 0:
+            encouragements = [
+                f"Nice! 🎉 I've selected {count:,} files for you. That's {bytes_to_readable(size)} of space you can free up!",
+                f"Great choice! ✅ Found {count:,} files ready to go. You'll free up {bytes_to_readable(size)}!",
+                f"Awesome! 🚀 {count:,} files selected. That's {bytes_to_readable(size)} coming back to you!",
+            ]
+            return encouragements[count % len(encouragements)]
+        return ""
+    
+    def _get_contextual_response(self, intent, params, result_data=None):
+        """Get contextual, human-like response."""
+        # Check if this is first command
+        if len(self.command_history) == 0:
+            return self._get_greeting()
+        
+        # Build natural response
+        responses = []
+        
+        if intent == 'delete_all_safe':
+            count = result_data.get('count', 0) if result_data else 0
+            size = result_data.get('size', 0) if result_data else 0
+            if count > 0:
+                responses.append(f"Perfect! I've selected {count:,} safe files for you.")
+                responses.append(f"That's {bytes_to_readable(size)} of space you can free up! 🎉")
+                responses.append("Just review them and click 'Delete Selected' when you're ready.")
+            else:
+                responses.append("Hmm, I couldn't find any safe files to select right now.")
+                responses.append("Try running a scan first, or check your filters!")
+        
+        elif intent == 'delete_category':
+            category = params.get('category', 'files')
+            count = result_data.get('count', 0) if result_data else 0
+            if count > 0:
+                responses.append(f"Got it! I've selected {count:,} {category} files.")
+                responses.append("These are safe to delete - they can usually be regenerated.")
+            else:
+                responses.append(f"I couldn't find any {category} files to delete.")
+                responses.append("Maybe they're already gone, or try scanning first?")
+        
+        elif intent == 'find_large':
+            size_mb = params.get('size_mb', 100)
+            count = result_data.get('count', 0) if result_data else 0
+            selected = result_data.get('selected', 0) if result_data else 0
+            responses.append(f"Found {count:,} files larger than {size_mb}MB!")
+            if selected > 0:
+                responses.append(f"I've selected {selected:,} safe ones for you. The big space hogs! 💾")
+            else:
+                responses.append("Take a look - some of these might be important, so review carefully.")
+        
+        elif intent == 'protect_path':
+            path = params.get('path', '')
+            if path:
+                responses.append(f"🛡️ Done! I've protected that path for you.")
+                responses.append("Nothing in there will ever be deleted, no matter what you ask me to do.")
+                responses.append("Your files are safe! ✨")
+            else:
+                responses.append("I couldn't find that path to protect.")
+                responses.append("Try using the 'Search & Protect' button, or give me a full path!")
+        
+        elif intent == 'show_stats':
+            responses.append("Here's what we're working with:")
+            if result_data:
+                responses.append(f"• Total files: {result_data.get('total', 0):,}")
+                responses.append(f"• Total size: {bytes_to_readable(result_data.get('total_size', 0))}")
+                responses.append(f"• Selected: {result_data.get('selected', 0):,} files")
+                responses.append(f"• Potential savings: {bytes_to_readable(result_data.get('selected_size', 0))}")
+        
+        elif intent == 'show_help':
+            responses.append("Sure thing! Here's what I can do for you:")
+            responses.append("")
+            responses.append("🗑️ DELETE/REMOVE:")
+            responses.append("• 'delete all safe files' - Selects everything safe to delete")
+            responses.append("• 'remove all node_modules' - Gets rid of Node.js dependencies")
+            responses.append("• 'clean temp files older than 30 days' - Old temp files")
+            responses.append("• 'delete files larger than 500MB' - Big files")
+            responses.append("")
+            responses.append("🔍 FIND/SEARCH:")
+            responses.append("• 'find large files' - Shows you the space hogs")
+            responses.append("• 'show files older than 90 days' - Old files")
+            responses.append("• 'find duplicates' - Finds duplicate files")
+            responses.append("")
+            responses.append("🛡️ PROTECT:")
+            responses.append("• 'protect my portfolio' - Keeps it safe forever")
+            responses.append("• 'never delete OneDrive' - Protects OneDrive")
+            responses.append("")
+            responses.append("Just talk to me naturally - I'll figure it out! 😊")
+        
+        elif intent == 'unknown':
+            responses.append("Hmm, I'm not quite sure what you mean by that. 🤔")
+            responses.append("Try something like:")
+            responses.append("• 'delete all safe files'")
+            responses.append("• 'find large files'")
+            responses.append("• 'help' for more options")
+            responses.append("")
+            responses.append("I'm still learning, but I'm getting smarter! 💪")
+        
+        return "\n".join(responses) if responses else "Done! ✅"
+    
+    def execute_command(self, command):
+        """Execute a natural language command."""
+        # Check for greetings
+        command_lower = command.lower().strip()
+        if any(word in command_lower for word in ['hi', 'hello', 'hey', 'sup']):
+            return self._get_greeting() + "\n\nWhat would you like me to help you with today?"
+        
+        # Check for thanks
+        if any(word in command_lower for word in ['thanks', 'thank you', 'ty', 'appreciate']):
+            thanks_responses = [
+                "You're welcome! Happy to help! 😊",
+                "Anytime! That's what I'm here for! ✨",
+                "No problem! Let me know if you need anything else! 🎉",
+            ]
+            return thanks_responses[len(self.command_history) % len(thanks_responses)]
+        
+        parsed = self.parse_command(command)
+        self.command_history.append(parsed)
+        self.conversation_context.append({'command': command, 'intent': parsed['intent']})
+        
+        intent = parsed['intent']
+        params = parsed['params']
+        
+        response = ""
+        result_data = {}
+        
+        try:
+            if intent == 'delete_all_safe':
+                self.app.select_all_safe()
+                count = sum(1 for r in self.app.all_records.values() if r.get('checked', False))
+                size = sum(r['size'] for r in self.app.all_records.values() if r.get('checked', False))
+                result_data = {'count': count, 'size': size}
+                response = self._get_contextual_response(intent, params, result_data)
+            
+            elif intent == 'delete_category':
+                category = params.get('category', 'Node Modules')
+                count = 0
+                size = 0
+                for rec in self.app.all_records.values():
+                    if rec['category'] == category and rec['safe']:
+                        rec['checked'] = True
+                        count += 1
+                        size += rec['size']
+                        if rec['path'] in self.app.tree.get_children():
+                            self.app.tree.set(rec['path'], "✓", "☑")
+                self.app._update_selection_stats()
+                result_data = {'count': count, 'size': size, 'category': category}
+                response = self._get_contextual_response(intent, params, result_data)
+            
+            elif intent == 'delete_old':
+                age_days = params.get('age_days', 90)
+                self.app.select_old_files(age_days)
+                count = sum(1 for r in self.app.all_records.values() if r.get('checked', False))
+                response = f"✅ Selected {count:,} files older than {age_days} days."
+            
+            elif intent == 'delete_large':
+                size_mb = params.get('size_mb', 100)
+                self.app.select_large_files(size_mb)
+                count = sum(1 for r in self.app.all_records.values() if r.get('checked', False))
+                response = f"✅ Selected {count:,} files larger than {size_mb}MB."
+            
+            elif intent == 'delete_duplicates':
+                self.app.find_duplicates()
+                response = "✅ Finding duplicates... Check the duplicate window for details."
+            
+            elif intent == 'find_duplicates':
+                self.app.find_duplicates()
+                response = "🔍 Searching for duplicate files..."
+            
+            elif intent == 'find_large':
+                size_mb = params.get('size_mb', 100)
+                # Select large files to highlight them
+                self.app.select_large_files(size_mb)
+                count = sum(1 for r in self.app.all_records.values() if r['size'] >= size_mb * 1024 * 1024)
+                selected = sum(1 for r in self.app.all_records.values() if r.get('checked', False))
+                result_data = {'count': count, 'selected': selected, 'size_mb': size_mb}
+                response = self._get_contextual_response(intent, params, result_data)
+            
+            elif intent == 'find_old':
+                age_days = params.get('age_days', 90)
+                # Filter results
+                old_files = [r for r in self.app.all_records.values() if r['age_days'] >= age_days]
+                response = f"🔍 Found {len(old_files):,} files older than {age_days} days."
+            
+            elif intent == 'protect_path':
+                # Extract path from command
+                path = params.get('path', '')
+                if not path:
+                    # Try to extract from command
+                    path_match = re.search(r'["\']([^"\']+)["\']', command)
+                    if path_match:
+                        path = path_match.group(1)
+                    # Try common patterns
+                    elif 'portfolio' in command_lower:
+                        # Try to find portfolio
+                        desktop = os.path.join(os.environ.get('USERPROFILE', ''), 'Desktop')
+                        if os.path.exists(desktop):
+                            for item in os.listdir(desktop):
+                                if 'portfolio' in item.lower():
+                                    path = os.path.join(desktop, item)
+                                    break
+                    elif 'onedrive' in command_lower:
+                        userprofile = os.environ.get('USERPROFILE', '')
+                        onedrive_paths = [
+                            os.path.join(userprofile, 'OneDrive'),
+                            os.path.join(userprofile, 'OneDrive - Personal'),
+                            os.path.join(userprofile, 'OneDrive - Work'),
+                        ]
+                        for op in onedrive_paths:
+                            if os.path.exists(op):
+                                path = op
+                                break
+                
+                if path and os.path.exists(path):
+                    if path not in PROTECTED_PATHS:
+                        PROTECTED_PATHS.append(path)
+                        save_protected_paths()
+                        self.app.update_protected_paths_list()
+                        result_data = {'path': path, 'success': True}
+                        response = self._get_contextual_response(intent, params, result_data)
+                    else:
+                        response = f"🛡️ That path is already protected! Your files there are safe. ✨"
+                else:
+                    response = "Hmm, I couldn't find that path to protect. 😕\n\nTry:\n• Using the 'Search & Protect' button\n• Or give me the full path like 'C:\\Users\\...\\Portfolio'\n• Or say 'protect my portfolio' and I'll try to find it!"
+            
+            elif intent == 'scan_location':
+                path = params.get('path', '')
+                if path and os.path.exists(path):
+                    self.app.current_path = path
+                    self.app.start_scan()
+                    response = f"🔍 Scanning: {path}"
+                else:
+                    response = "❌ Invalid path. Please provide a valid directory path."
+            
+            elif intent == 'show_stats':
+                total = len(self.app.all_records)
+                total_size = sum(r['size'] for r in self.app.all_records.values())
+                selected = sum(1 for r in self.app.all_records.values() if r.get('checked', False))
+                selected_size = sum(r['size'] for r in self.app.all_records.values() if r.get('checked', False))
+                result_data = {'total': total, 'total_size': total_size, 'selected': selected, 'selected_size': selected_size}
+                response = self._get_contextual_response(intent, params, result_data)
+            
+            elif intent == 'show_help':
+                result_data = {}
+                response = self._get_contextual_response(intent, params, result_data)
+            
+            elif intent == 'unknown':
+                result_data = {}
+                response = self._get_contextual_response(intent, params, result_data)
+            
+            else:
+                response = f"✅ Command executed: {intent}"
+        
+        except Exception as e:
+            response = f"Oops! 😅 Something went wrong: {str(e)}\n\nDon't worry, nothing was deleted. Try again or let me know if you need help!"
+        
+        # Add follow-up suggestions based on context
+        if intent in ['delete_all_safe', 'delete_category', 'delete_large', 'delete_old']:
+            if result_data.get('count', 0) > 0:
+                response += "\n\n💡 Tip: Review the selected files, then click 'Delete Selected' when ready!"
+        
+        return response
 
 # ============================================
 # RULE MANAGER
@@ -262,10 +814,15 @@ class ScannerEngine:
                         if scanned % 10 == 0:
                             yield ('progress', progress, scanned, total_files)
                         
-                        # Skip if unsafe
+                        # Skip if unsafe or protected
                         safe, reason = is_system_file_safe(path)
                         if not safe:
                             continue
+                        
+                        # Double-check protected paths (extra safety)
+                        is_protected, protect_reason = is_path_protected(path)
+                        if is_protected:
+                            continue  # Skip protected files entirely
                         
                         # Get file info
                         size = os.path.getsize(path)
@@ -353,6 +910,10 @@ class DiskCleanupProfessional:
         # Setup
         self.rule_manager = RuleManager()
         self.scanner = ScannerEngine(self.rule_manager)
+        self.ai_agent = CleanupAI(self)
+        
+        # Load protected paths
+        load_protected_paths()
         
         # Data
         self.all_records = {}
@@ -360,6 +921,8 @@ class DiskCleanupProfessional:
         self.scan_thread = None
         self.is_scanning = False
         self.current_path = ""
+        self.advanced_mode = False
+        self.duplicate_groups = {}
         
         # UI Variables
         self.search_var = tk.StringVar()
@@ -382,7 +945,9 @@ class DiskCleanupProfessional:
         
         # Build UI
         self._setup_styles()
-        self._build_ui()
+        
+        # Show welcome screen first
+        self.show_welcome_screen()
         
         # Start queue polling
         self.root.after(100, self._poll_queue)
@@ -408,6 +973,127 @@ class DiskCleanupProfessional:
         
         self.root.configure(bg=self.colors['bg'])
     
+    def show_welcome_screen(self):
+        """Show welcome screen with quick start options."""
+        # Clear existing widgets
+        for widget in self.root.winfo_children():
+            widget.destroy()
+        
+        welcome_frame = ttk.Frame(self.root)
+        welcome_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Title
+        title_label = ttk.Label(welcome_frame, 
+                               text="🚀 Disk Cleanup Professional",
+                               font=("Segoe UI", 32, "bold"))
+        title_label.pack(pady=(50, 10))
+        
+        subtitle_label = ttk.Label(welcome_frame,
+                                  text="Free up disk space quickly and safely",
+                                  font=("Segoe UI", 14))
+        subtitle_label.pack(pady=(0, 50))
+        
+        # Quick action buttons
+        button_frame = ttk.Frame(welcome_frame)
+        button_frame.pack(pady=20)
+        
+        # One-Click Cleanup button (large and prominent)
+        one_click_btn = tk.Button(button_frame,
+                                  text="⚡ ONE-CLICK CLEANUP\n\nScans common locations\nAuto-selects safe files\nFree up space instantly",
+                                  font=("Segoe UI", 14, "bold"),
+                                  bg="#2ecc71",
+                                  fg="white",
+                                  relief=tk.RAISED,
+                                  bd=5,
+                                  width=25,
+                                  height=6,
+                                  cursor="hand2",
+                                  command=self.one_click_cleanup)
+        one_click_btn.pack(side=tk.LEFT, padx=20, pady=10)
+        
+        # Smart Scan button
+        smart_scan_btn = tk.Button(button_frame,
+                                 text="🧠 SMART SCAN\n\nFinds biggest space wasters\nScans entire user profile\nHighlights top files",
+                                 font=("Segoe UI", 14, "bold"),
+                                 bg="#3498db",
+                                 fg="white",
+                                 relief=tk.RAISED,
+                                 bd=5,
+                                 width=25,
+                                 height=6,
+                                 cursor="hand2",
+                                 command=self.smart_scan)
+        smart_scan_btn.pack(side=tk.LEFT, padx=20, pady=10)
+        
+        # Custom Scan button
+        custom_scan_btn = tk.Button(button_frame,
+                                   text="⚙️ CUSTOM SCAN\n\nFull control over scanning\nAdvanced filters\nManual selection",
+                                   font=("Segoe UI", 14, "bold"),
+                                   bg="#95a5a6",
+                                   fg="white",
+                                   relief=tk.RAISED,
+                                   bd=5,
+                                   width=25,
+                                   height=6,
+                                   cursor="hand2",
+                                   command=self.show_main_ui)
+        custom_scan_btn.pack(side=tk.LEFT, padx=20, pady=10)
+        
+        # AI Agent button (prominent and animated)
+        ai_frame = ttk.Frame(welcome_frame)
+        ai_frame.pack(pady=20)
+        
+        ai_btn = tk.Button(ai_frame,
+                          text="🤖 TALK TO AI AGENT\n\nJust tell me what to do!\n'delete all safe files'\n'find large files'\n'protect my portfolio'",
+                          font=("Segoe UI", 12, "bold"),
+                          bg="#9b59b6",
+                          fg="white",
+                          relief=tk.RAISED,
+                          bd=5,
+                          width=35,
+                          height=5,
+                          cursor="hand2",
+                          command=self.show_main_ui,
+                          activebackground="#8e44ad",
+                          activeforeground="white")
+        ai_btn.pack()
+        
+        # Add subtle animation hint
+        def animate_ai_button():
+            current_bg = ai_btn.cget('bg')
+            if current_bg == "#9b59b6":
+                ai_btn.config(bg="#8e44ad")
+            else:
+                ai_btn.config(bg="#9b59b6")
+            self.root.after(1500, animate_ai_button)
+        
+        self.root.after(1000, animate_ai_button)
+        
+        # Info text with better formatting
+        info_frame = ttk.Frame(welcome_frame)
+        info_frame.pack(pady=(20, 0))
+        
+        info_label = ttk.Label(info_frame,
+                              text="🔒 All operations are safe",
+                              font=("Segoe UI", 11, "bold"),
+                              foreground="#2ecc71")
+        info_label.pack()
+        
+        info_label2 = ttk.Label(info_frame,
+                               text="System files and protected paths (Portfolio, OneDrive) are never deleted",
+                               font=("Segoe UI", 9),
+                               foreground="#7f8c8d")
+        info_label2.pack()
+    
+    def show_main_ui(self):
+        """Show the main application UI."""
+        # Clear existing widgets
+        for widget in self.root.winfo_children():
+            widget.destroy()
+        
+        self.advanced_mode = True
+        self._build_ui()
+    
     def _build_ui(self):
         """Build the complete user interface."""
         # Main container
@@ -431,8 +1117,11 @@ class DiskCleanupProfessional:
         left_panel = ttk.Frame(content_frame, width=300)
         left_panel.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10))
         
+        self._build_ai_panel(left_panel)
+        self._build_protected_paths_panel(left_panel)
         self._build_filters_panel(left_panel)
         self._build_stats_panel(left_panel)
+        self._build_visualization_panel(left_panel)
         self._build_category_panel(left_panel)
         
         # Right Panel (Results)
@@ -449,24 +1138,45 @@ class DiskCleanupProfessional:
         header = ttk.Frame(parent)
         header.pack(fill=tk.X, pady=(0, 15))
         
-        ttk.Label(header,
+        left_header = ttk.Frame(header)
+        left_header.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        
+        ttk.Label(left_header,
                  text="🚀 DISK CLEANUP PROFESSIONAL",
                  font=("Segoe UI", 22, "bold"),
                  foreground=self.colors['text']).pack(anchor=tk.W)
         
-        ttk.Label(header,
+        ttk.Label(left_header,
                  text="Smart cleaning with advanced safety protection",
                  font=("Segoe UI", 11),
                  foreground="#7f8c8d").pack(anchor=tk.W)
+        
+        # Back to welcome button
+        ttk.Button(header, text="🏠 Welcome Screen",
+                  command=self.show_welcome_screen, width=15).pack(side=tk.RIGHT, padx=(10, 0))
     
     def _build_control_panel(self, parent):
         """Build control panel with scan options."""
         control_frame = ttk.LabelFrame(parent, text="Scan Controls", padding="15")
         control_frame.pack(fill=tk.X, pady=(0, 15))
         
-        # Row 1: Scan buttons
+        # Row 1: Quick action buttons (prominent)
         row1 = ttk.Frame(control_frame)
         row1.pack(fill=tk.X, pady=(0, 10))
+        
+        one_click_btn = tk.Button(row1, text="⚡ ONE-CLICK CLEANUP",
+                                  command=self.one_click_cleanup,
+                                  bg="#2ecc71", fg="white",
+                                  font=("Segoe UI", 11, "bold"),
+                                  width=18, height=2)
+        one_click_btn.pack(side=tk.LEFT, padx=(0, 10))
+        
+        smart_scan_btn = tk.Button(row1, text="🧠 SMART SCAN",
+                                   command=self.smart_scan,
+                                   bg="#3498db", fg="white",
+                                   font=("Segoe UI", 11, "bold"),
+                                   width=18, height=2)
+        smart_scan_btn.pack(side=tk.LEFT, padx=(0, 10))
         
         ttk.Button(row1, text="📁 Select Folder",
                   command=self.select_folder, width=15).pack(side=tk.LEFT, padx=(0, 10))
@@ -499,18 +1209,35 @@ class DiskCleanupProfessional:
         self.category_dropdown.pack(side=tk.LEFT, padx=(0, 15))
         self.category_dropdown.bind('<<ComboboxSelected>>', lambda e: self.apply_filters())
         
-        # Row 3: Action buttons
+        # Row 3: Smart selection buttons
         row3 = ttk.Frame(control_frame)
-        row3.pack(fill=tk.X)
+        row3.pack(fill=tk.X, pady=(0, 10))
         
-        ttk.Button(row3, text="✅ Select All",
+        ttk.Button(row3, text="✅ Select All Safe",
+                  command=self.select_all_safe, width=15).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Button(row3, text="📦 Select Large (>100MB)",
+                  command=lambda: self.select_large_files(100), width=18).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Button(row3, text="📅 Select Old (>90 days)",
+                  command=lambda: self.select_old_files(90), width=18).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Button(row3, text="🔍 Find Duplicates",
+                  command=self.find_duplicates, width=15).pack(side=tk.LEFT, padx=(0, 10))
+        
+        # Row 4: Action buttons
+        row4 = ttk.Frame(control_frame)
+        row4.pack(fill=tk.X)
+        
+        ttk.Button(row4, text="✅ Select All",
                   command=self.select_all, width=12).pack(side=tk.LEFT, padx=(0, 10))
-        ttk.Button(row3, text="❌ Clear All",
+        ttk.Button(row4, text="❌ Clear All",
                   command=self.clear_all, width=12).pack(side=tk.LEFT, padx=(0, 10))
-        ttk.Button(row3, text="🗑️ Delete Selected",
+        ttk.Button(row4, text="🗑️ Delete Selected",
                   command=self.delete_selected, width=15).pack(side=tk.LEFT, padx=(0, 10))
-        ttk.Button(row3, text="📊 Generate Report",
-                  command=self.generate_report, width=15).pack(side=tk.LEFT)
+        ttk.Button(row4, text="📊 Generate Report",
+                  command=self.generate_report, width=15).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Button(row4, text="💾 Export Results",
+                  command=self.export_results, width=15).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Button(row4, text="📥 Import Results",
+                  command=self.import_results, width=15).pack(side=tk.LEFT)
     
     def _build_progress_section(self, parent):
         """Build progress display section."""
@@ -534,6 +1261,317 @@ class DiskCleanupProfessional:
         # Current file
         self.current_file_label = ttk.Label(progress_frame, text="", foreground="#666")
         self.current_file_label.pack(fill=tk.X)
+    
+    def _build_ai_panel(self, parent):
+        """Build AI agent chat panel."""
+        ai_frame = ttk.LabelFrame(parent, text="🤖 AI Agent - Just Tell Me What To Do", padding="10")
+        ai_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+        
+        # Chat display
+        chat_container = ttk.Frame(ai_frame)
+        chat_container.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+        
+        # Scrollable text widget for chat
+        scrollbar = ttk.Scrollbar(chat_container)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        self.ai_chat_text = tk.Text(chat_container, height=8, wrap=tk.WORD, 
+                                    font=("Segoe UI", 9),
+                                    yscrollcommand=scrollbar.set)
+        self.ai_chat_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.config(command=self.ai_chat_text.yview)
+        
+        # Welcome message with personality
+        welcome_msgs = [
+            "👋 Hey! I'm your cleanup assistant. Just tell me what you need!\n\nTry:\n• 'delete all safe files'\n• 'find large files'\n• 'protect my portfolio'\n• 'help' for more\n\nI'm here to help! 😊\n",
+            "🤖 Hi there! Ready to free up some space?\n\nI can help you:\n• Find and delete safe files\n• Protect important folders\n• Find duplicates and large files\n\nJust talk to me naturally! 💬\n",
+            "✨ Hello! I'm your smart cleanup buddy.\n\nSay things like:\n• 'delete all safe files'\n• 'find large files'\n• 'protect my portfolio'\n• Type 'help' to see everything I can do!\n\nLet's get started! 🚀\n",
+        ]
+        welcome_msg = welcome_msgs[hash(str(time.time())) % len(welcome_msgs)]
+        self.ai_chat_text.insert(1.0, welcome_msg)
+        self.ai_chat_text.config(state=tk.DISABLED)
+        
+        # Input frame
+        input_frame = ttk.Frame(ai_frame)
+        input_frame.pack(fill=tk.X)
+        
+        self.ai_input_var = tk.StringVar()
+        ai_entry = ttk.Entry(input_frame, textvariable=self.ai_input_var, font=("Segoe UI", 10))
+        ai_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
+        ai_entry.bind('<Return>', lambda e: self.execute_ai_command())
+        
+        ttk.Button(input_frame, text="Send", command=self.execute_ai_command, width=8).pack(side=tk.RIGHT)
+        
+        # Quick commands
+        quick_frame = ttk.Frame(ai_frame)
+        quick_frame.pack(fill=tk.X, pady=(5, 0))
+        
+        ttk.Label(quick_frame, text="Quick:", font=("Segoe UI", 8)).pack(side=tk.LEFT, padx=(0, 5))
+        
+        quick_commands = [
+            ("Safe", "delete all safe files"),
+            ("Large", "find large files"),
+            ("Old", "find files older than 90 days"),
+            ("Stats", "show stats"),
+        ]
+        
+        for label, cmd in quick_commands:
+            btn = ttk.Button(quick_frame, text=label, width=8,
+                           command=lambda c=cmd: self.quick_ai_command(c))
+            btn.pack(side=tk.LEFT, padx=2)
+    
+    def execute_ai_command(self):
+        """Execute AI command from input."""
+        command = self.ai_input_var.get().strip()
+        if not command:
+            return
+        
+        # Clear input
+        self.ai_input_var.set("")
+        
+        # Enable text widget and add user message
+        self.ai_chat_text.config(state=tk.NORMAL)
+        self.ai_chat_text.insert(tk.END, f"\n👤 You: {command}\n")
+        self.ai_chat_text.see(tk.END)
+        self.ai_chat_text.update()
+        
+        # Show thinking indicator
+        self.ai_chat_text.insert(tk.END, "🤖 AI: ")
+        self.ai_chat_text.see(tk.END)
+        self.ai_chat_text.update()
+        
+        # Small delay for natural feel
+        self.root.update()
+        time.sleep(0.1)
+        
+        # Execute command
+        try:
+            response = self.ai_agent.execute_command(command)
+        except Exception as e:
+            response = f"Oops! 😅 Something went wrong: {str(e)}\n\nDon't worry, nothing was deleted. Try again!"
+        
+        # Remove "thinking" and add actual response
+        self.ai_chat_text.delete("end-1l", tk.END)
+        self.ai_chat_text.insert(tk.END, f"🤖 AI: {response}\n")
+        self.ai_chat_text.see(tk.END)
+        self.ai_chat_text.config(state=tk.DISABLED)
+        
+        # Update UI if needed
+        self.apply_filters()
+        self.update_visualization()
+        
+        # Playful success sound effect (visual)
+        if "selected" in response.lower() or "found" in response.lower():
+            # Flash the chat briefly
+            original_bg = self.ai_chat_text.cget('bg')
+            self.ai_chat_text.config(bg='#e8f5e9')
+            self.root.after(200, lambda: self.ai_chat_text.config(bg=original_bg))
+    
+    def quick_ai_command(self, command):
+        """Execute a quick AI command."""
+        self.ai_input_var.set(command)
+        self.execute_ai_command()
+    
+    def _build_protected_paths_panel(self, parent):
+        """Build protected paths management panel."""
+        protect_frame = ttk.LabelFrame(parent, text="🛡️ Protected Paths", padding="10")
+        protect_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        # List of protected paths
+        list_frame = ttk.Frame(protect_frame)
+        list_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+        
+        scrollbar = ttk.Scrollbar(list_frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        self.protected_listbox = tk.Listbox(list_frame, height=4, font=("Segoe UI", 8),
+                                            yscrollcommand=scrollbar.set)
+        self.protected_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.config(command=self.protected_listbox.yview)
+        
+        # Update list
+        self.update_protected_paths_list()
+        
+        # Buttons
+        btn_frame = ttk.Frame(protect_frame)
+        btn_frame.pack(fill=tk.X)
+        
+        ttk.Button(btn_frame, text="➕ Add Path",
+                  command=self.add_protected_path, width=12).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(btn_frame, text="🔍 Search & Protect",
+                  command=self.search_and_protect, width=15).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(btn_frame, text="➖ Remove",
+                  command=self.remove_protected_path, width=12).pack(side=tk.LEFT)
+    
+    def update_protected_paths_list(self):
+        """Update the protected paths listbox."""
+        self.protected_listbox.delete(0, tk.END)
+        for path in PROTECTED_PATHS:
+            # Show shortened path
+            display_path = path
+            if len(display_path) > 40:
+                display_path = "..." + display_path[-37:]
+            self.protected_listbox.insert(tk.END, display_path)
+    
+    def add_protected_path(self):
+        """Add a protected path."""
+        path = filedialog.askdirectory(title="Select Directory to Protect")
+        if path:
+            if path not in PROTECTED_PATHS:
+                PROTECTED_PATHS.append(path)
+                save_protected_paths()
+                self.update_protected_paths_list()
+                messagebox.showinfo("Path Protected", f"🛡️ Protected: {path}\n\nFiles in this location will never be deleted.")
+            else:
+                messagebox.showinfo("Already Protected", f"This path is already protected.")
+    
+    def remove_protected_path(self):
+        """Remove a protected path."""
+        selection = self.protected_listbox.curselection()
+        if not selection:
+            messagebox.showinfo("No Selection", "Please select a path to remove.")
+            return
+        
+        index = selection[0]
+        path = PROTECTED_PATHS[index]
+        
+        response = messagebox.askyesno("Remove Protection", 
+                                      f"Remove protection from:\n{path}?")
+        if response:
+            PROTECTED_PATHS.pop(index)
+            save_protected_paths()
+            self.update_protected_paths_list()
+    
+    def search_and_protect(self):
+        """Search for files/folders and protect them."""
+        search_window = tk.Toplevel(self.root)
+        search_window.title("Search & Protect")
+        search_window.geometry("600x400")
+        
+        # Search input
+        search_frame = ttk.Frame(search_window, padding="10")
+        search_frame.pack(fill=tk.X)
+        
+        ttk.Label(search_frame, text="Search for:", font=("Segoe UI", 10, "bold")).pack(anchor=tk.W)
+        
+        search_input_var = tk.StringVar()
+        search_entry = ttk.Entry(search_frame, textvariable=search_input_var, width=50, font=("Segoe UI", 10))
+        search_entry.pack(fill=tk.X, pady=(5, 0))
+        search_entry.bind('<Return>', lambda e: self._perform_search(search_input_var.get(), results_listbox))
+        
+        ttk.Label(search_frame, text="Examples: 'portfolio', 'onedrive', 'my projects'", 
+                 font=("Segoe UI", 8), foreground="#666").pack(anchor=tk.W, pady=(2, 0))
+        
+        # Results
+        results_frame = ttk.LabelFrame(search_window, text="Search Results", padding="10")
+        results_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        results_scrollbar = ttk.Scrollbar(results_frame)
+        results_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        results_listbox = tk.Listbox(results_frame, font=("Segoe UI", 9),
+                                     yscrollcommand=results_scrollbar.set)
+        results_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        results_scrollbar.config(command=results_listbox.yview)
+        
+        # Buttons
+        btn_frame = ttk.Frame(search_window, padding="10")
+        btn_frame.pack(fill=tk.X)
+        
+        ttk.Button(btn_frame, text="🔍 Search",
+                  command=lambda: self._perform_search(search_input_var.get(), results_listbox)).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(btn_frame, text="🛡️ Protect Selected",
+                  command=lambda: self._protect_selected_from_search(results_listbox, search_window)).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(btn_frame, text="Close",
+                  command=search_window.destroy).pack(side=tk.RIGHT)
+        
+        # Store search results
+        self.search_results = []
+    
+    def _perform_search(self, search_term, listbox):
+        """Perform search for files/folders matching search term."""
+        if not search_term:
+            messagebox.showinfo("No Search Term", "Please enter a search term.")
+            return
+        
+        listbox.delete(0, tk.END)
+        self.search_results = []
+        
+        search_term_lower = search_term.lower()
+        userprofile = os.environ.get('USERPROFILE', '')
+        
+        # Search in common locations
+        search_locations = [
+            userprofile,
+            os.path.join(userprofile, 'Desktop') if userprofile else '',
+            os.path.join(userprofile, 'Documents') if userprofile else '',
+            os.path.join(userprofile, 'OneDrive') if userprofile else '',
+        ]
+        
+        found_count = 0
+        max_results = 100  # Limit results
+        
+        for location in search_locations:
+            if not location or not os.path.exists(location):
+                continue
+            
+            try:
+                for root, dirs, files in os.walk(location):
+                    # Check directories
+                    for d in dirs:
+                        if found_count >= max_results:
+                            break
+                        if search_term_lower in d.lower():
+                            full_path = os.path.join(root, d)
+                            if os.path.exists(full_path):
+                                self.search_results.append(full_path)
+                                display = f"📁 {full_path}"
+                                if len(display) > 80:
+                                    display = "📁 ..." + display[-76:]
+                                listbox.insert(tk.END, display)
+                                found_count += 1
+                    
+                    # Limit depth to avoid too much searching
+                    if root.count(os.sep) - location.count(os.sep) > 3:
+                        dirs[:] = []
+                    
+                    if found_count >= max_results:
+                        break
+                
+                if found_count >= max_results:
+                    break
+            except:
+                continue
+        
+        if found_count == 0:
+            listbox.insert(0, "No results found. Try a different search term.")
+        elif found_count >= max_results:
+            listbox.insert(tk.END, f"\n... (showing first {max_results} results)")
+    
+    def _protect_selected_from_search(self, listbox, window):
+        """Protect selected paths from search results."""
+        selection = listbox.curselection()
+        if not selection:
+            messagebox.showinfo("No Selection", "Please select paths to protect.")
+            return
+        
+        protected_count = 0
+        for index in selection:
+            if index < len(self.search_results):
+                path = self.search_results[index]
+                if path not in PROTECTED_PATHS:
+                    PROTECTED_PATHS.append(path)
+                    protected_count += 1
+        
+        if protected_count > 0:
+            save_protected_paths()
+            self.update_protected_paths_list()
+            messagebox.showinfo("Paths Protected", 
+                              f"🛡️ Protected {protected_count} path(s).\n\n"
+                              f"These locations will never be deleted.")
+            window.destroy()
+        else:
+            messagebox.showinfo("Already Protected", "Selected paths are already protected.")
     
     def _build_filters_panel(self, parent):
         """Build filters panel."""
@@ -569,7 +1607,8 @@ class DiskCleanupProfessional:
             ("Selected:", "selected", "0 files"),
             ("Selected Size:", "selected_size", "0.00 GB"),
             ("Potential Save:", "potential", "0.00 GB"),
-            ("Scan Time:", "time", "0s")
+            ("Scan Time:", "time", "0s"),
+            ("Top 5 Size:", "top5", "0.00 GB")
         ]
         
         for label, key, default in stats_data:
@@ -580,6 +1619,32 @@ class DiskCleanupProfessional:
             self.stats_labels[key] = ttk.Label(frame, text=default,
                                              font=("Segoe UI", 10, "bold"))
             self.stats_labels[key].pack(side=tk.RIGHT)
+        
+        # Initialize top5 if not in stats_data loop
+        if "top5" not in self.stats_labels:
+            frame = ttk.Frame(stats_frame)
+            frame.pack(fill=tk.X, pady=2)
+            ttk.Label(frame, text="Top 5 Size:").pack(side=tk.LEFT)
+            self.stats_labels["top5"] = ttk.Label(frame, text="0.00 GB",
+                                                font=("Segoe UI", 10, "bold"))
+            self.stats_labels["top5"].pack(side=tk.RIGHT)
+    
+    def _build_visualization_panel(self, parent):
+        """Build disk space visualization panel."""
+        viz_frame = ttk.LabelFrame(parent, text="Space Breakdown", padding="10")
+        viz_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+        
+        # Canvas for visualization
+        self.viz_canvas = tk.Canvas(viz_frame, height=200, bg="white")
+        self.viz_canvas.pack(fill=tk.BOTH, expand=True)
+        
+        # Bind canvas resize to update visualization
+        self.viz_canvas.bind('<Configure>', lambda e: self.update_visualization())
+        
+        # Label for visualization info
+        self.viz_label = ttk.Label(viz_frame, text="Scan files to see space breakdown",
+                                  font=("Segoe UI", 9))
+        self.viz_label.pack(pady=5)
     
     def _build_category_panel(self, parent):
         """Build category selection panel."""
@@ -624,17 +1689,20 @@ class DiskCleanupProfessional:
     
     def _build_results_table(self, parent):
         """Build results table."""
-        table_frame = ttk.LabelFrame(parent, text="Scan Results", padding="10")
+        table_frame = ttk.LabelFrame(parent, text="Scan Results (Click column headers to sort)", padding="10")
         table_frame.pack(fill=tk.BOTH, expand=True)
         
         # Create treeview
         columns = ("✓", "Type", "Size", "Age", "Category", "Safety", "Action", "Path")
         self.tree = ttk.Treeview(table_frame, columns=columns, show="headings", selectmode="none")
         
-        # Configure columns
+        # Configure columns with sorting
         widths = [40, 40, 80, 60, 120, 80, 120, 800]
+        self.sort_column = "Size"
+        self.sort_reverse = True  # Start with largest first
+        
         for col, width in zip(columns, widths):
-            self.tree.heading(col, text=col)
+            self.tree.heading(col, text=col, command=lambda c=col: self.sort_by_column(c))
             anchor = tk.CENTER if col in ["✓", "Type", "Size", "Age", "Safety"] else tk.W
             self.tree.column(col, width=width, anchor=anchor)
         
@@ -660,8 +1728,32 @@ class DiskCleanupProfessional:
         status_frame = ttk.Frame(parent, relief=tk.SUNKEN, padding="5")
         status_frame.pack(fill=tk.X, side=tk.BOTTOM)
         
-        self.status_label = ttk.Label(status_frame, text="Ready to scan")
+        self.status_label = ttk.Label(status_frame, 
+                                       text="✨ Ready to scan - Click a button above to get started!",
+                                       font=("Segoe UI", 9))
         self.status_label.pack(side=tk.LEFT)
+        
+        # Add helpful tip
+        tips = [
+            "💡 Tip: Try the AI Agent for natural language commands!",
+            "💡 Tip: Your Portfolio and OneDrive are automatically protected!",
+            "💡 Tip: Use 'One-Click Cleanup' for instant space freeing!",
+        ]
+        self.tip_label = ttk.Label(status_frame, 
+                                   text=tips[0],
+                                   font=("Segoe UI", 8),
+                                   foreground="#7f8c8d")
+        self.tip_label.pack(side=tk.RIGHT)
+        
+        # Rotate tips
+        def rotate_tip():
+            current_tip = self.tip_label.cget('text')
+            current_index = tips.index(current_tip) if current_tip in tips else 0
+            next_index = (current_index + 1) % len(tips)
+            self.tip_label.config(text=tips[next_index])
+            self.root.after(10000, rotate_tip)  # Change tip every 10 seconds
+        
+        self.root.after(10000, rotate_tip)
     
     def _set_all_categories(self, state):
         """Select all or no categories."""
@@ -690,20 +1782,188 @@ class DiskCleanupProfessional:
                     self.start_scan()
                     break
     
+    def one_click_cleanup(self):
+        """One-click cleanup: scan common locations, auto-select safe files, show preview."""
+        if self.is_scanning:
+            messagebox.showinfo("Scan in Progress", "Please wait for the current scan to complete.")
+            return
+        
+        # Show main UI if on welcome screen
+        if not self.advanced_mode:
+            self.show_main_ui()
+            self.root.update()
+            time.sleep(0.1)  # Brief pause for UI to render
+        
+        # Get all common locations
+        locations = get_common_locations()
+        if not locations:
+            messagebox.showwarning("No Locations", "Could not find common cleanup locations.")
+            return
+        
+        # Ask user to confirm
+        response = messagebox.askyesno(
+            "One-Click Cleanup",
+            f"This will scan {len(locations)} common locations:\n\n" +
+            "\n".join([f"• {loc}" for loc in locations[:5]]) +
+            (f"\n... and {len(locations)-5} more" if len(locations) > 5 else "") +
+            "\n\nSafe files will be auto-selected for deletion.\n\nContinue?",
+            icon=messagebox.QUESTION
+        )
+        
+        if not response:
+            return
+        
+        # Clear previous results
+        self.tree.delete(*self.tree.get_children())
+        self.all_records.clear()
+        
+        # Set scan parameters for one-click (lower threshold, all categories)
+        self.min_mb_var.set(1)  # Lower threshold
+        self.age_days_var.set(0)  # All ages
+        
+        # Store locations to scan
+        self.one_click_locations = locations
+        self.one_click_current_location = 0
+        self.one_click_results = []
+        
+        # Start scanning first location
+        if locations:
+            self.current_path = locations[0]
+            self.one_click_scan_next_location()
+    
+    def one_click_scan_next_location(self):
+        """Scan next location in one-click cleanup."""
+        if self.one_click_current_location >= len(self.one_click_locations):
+            # All locations scanned, process results
+            self._process_one_click_results()
+            return
+        
+        location = self.one_click_locations[self.one_click_current_location]
+        self.current_path = location
+        self.is_scanning = True
+        self.progress_text.config(text=f"Scanning location {self.one_click_current_location + 1}/{len(self.one_click_locations)}: {location}")
+        
+        # Start scan thread
+        selected_categories = list(self.rule_manager.get_all_categories())
+        self.scan_thread = threading.Thread(
+            target=self._one_click_scan_worker,
+            args=(location, 1, 0, selected_categories),
+            daemon=True
+        )
+        self.scan_thread.start()
+    
+    def _one_click_scan_worker(self, path, min_mb, age_days, categories):
+        """Worker for one-click cleanup scanning."""
+        try:
+            scan_gen = self.scanner.scan(path, min_mb, age_days, categories)
+            location_results = []
+            
+            for item in scan_gen:
+                if item[0] == 'progress':
+                    _, progress, scanned, total = item
+                    # Adjust progress for multi-location scan
+                    base_progress = (self.one_click_current_location / len(self.one_click_locations)) * 100
+                    location_progress = (progress / len(self.one_click_locations))
+                    total_progress = base_progress + location_progress
+                    self.scan_queue.put(('progress', (min(100, total_progress), scanned, total)))
+                
+                elif item[0] == 'result':
+                    _, result = item
+                    location_results.append(result)
+                    self.scan_queue.put(('result', result))
+                
+                elif item[0] == 'complete':
+                    self.one_click_results.extend(location_results)
+                    self.one_click_current_location += 1
+                    self.scan_queue.put(('one_click_next', None))
+                    break
+                
+                elif item[0] == 'error':
+                    self.one_click_current_location += 1
+                    self.scan_queue.put(('one_click_next', None))
+                    break
+        
+        except Exception as e:
+            self.scan_queue.put(('error', str(e)))
+            self.one_click_current_location += 1
+            self.scan_queue.put(('one_click_next', None))
+    
+    def _process_one_click_results(self):
+        """Process results from one-click cleanup."""
+        # Process results
+        for result in self.one_click_results:
+            iid = result['path']
+            self.all_records[iid] = result
+            
+            # Auto-select safe files
+            if result['safe'] and "Safe" in result['action']:
+                result['checked'] = True
+        
+        # Update UI
+        self.is_scanning = False
+        self.progress_bar['value'] = 100
+        self.progress_text.config(text="Scan complete")
+        
+        # Show results and auto-select summary
+        safe_count = sum(1 for r in self.all_records.values() if r.get('checked', False))
+        safe_size = sum(r['size'] for r in self.all_records.values() if r.get('checked', False))
+        
+        self.apply_filters()
+        self.update_visualization()
+        
+        messagebox.showinfo(
+            "One-Click Cleanup Complete",
+            f"Found {len(self.all_records):,} files.\n\n"
+            f"✅ Auto-selected {safe_count:,} safe files ({bytes_to_readable(safe_size)})\n\n"
+            f"Review the selection and click 'Delete Selected' to free up space."
+        )
+    
+    def smart_scan(self):
+        """Smart scan: find biggest space wasters in user profile."""
+        if self.is_scanning:
+            messagebox.showinfo("Scan in Progress", "Please wait for the current scan to complete.")
+            return
+        
+        # Show main UI if on welcome screen
+        if not self.advanced_mode:
+            self.show_main_ui()
+            self.root.update()
+        
+        userprofile = os.environ.get('USERPROFILE', '')
+        if not userprofile or not os.path.exists(userprofile):
+            messagebox.showwarning("No User Profile", "Could not find user profile directory.")
+            return
+        
+        response = messagebox.askyesno(
+            "Smart Scan",
+            f"This will scan your entire user profile:\n{userprofile}\n\n"
+            "It will find the biggest space wasters and highlight them.\n\nContinue?",
+            icon=messagebox.QUESTION
+        )
+        
+        if not response:
+            return
+        
+        # Clear and start scan
+        self.tree.delete(*self.tree.get_children())
+        self.all_records.clear()
+        self.current_path = userprofile
+        
+        # Set parameters for smart scan (focus on larger files)
+        self.min_mb_var.set(50)  # Focus on larger files
+        self.age_days_var.set(0)
+        
+        self.start_scan()
+    
     def quick_clean(self):
         """Quick clean of common locations."""
-        locations = [
-            os.environ.get('TEMP', ''),
-            os.environ.get('TMP', ''),
-            os.path.join(os.environ.get('USERPROFILE', ''), 'Downloads'),
-            os.path.join(os.environ.get('USERPROFILE', ''), 'AppData', 'Local', 'Temp')
-        ]
+        locations = get_common_locations()
         
-        for location in locations:
-            if location and os.path.exists(location):
-                self.current_path = location
-                self.start_scan()
-                break
+        if locations:
+            self.current_path = locations[0]
+            self.start_scan()
+        else:
+            messagebox.showwarning("No Locations", "Could not find common cleanup locations.")
     
     def start_scan(self):
         """Start scanning process."""
@@ -849,24 +2109,57 @@ class DiskCleanupProfessional:
                         
                         self.stats_labels['potential'].config(text=bytes_to_readable(safe_size))
                         self.stats['potential_savings'] = safe_size
+                        
+                        # Calculate top 5 files size
+                        sorted_files = sorted(self.all_records.values(), key=lambda x: x['size'], reverse=True)
+                        top5_size = sum(f['size'] for f in sorted_files[:5])
+                        self.stats_labels['top5'].config(text=bytes_to_readable(top5_size))
                     
                     elif cmd == 'complete':
                         self.is_scanning = False
-                        self.progress_text.config(text="Scan complete")
-                        self.status_label.config(
-                            text=f"Found {len(self.all_records):,} files, "
-                                 f"{bytes_to_readable(self.scanner.stats['total_size'])} total"
-                        )
+                        self.progress_text.config(text="✅ Scan complete!")
+                        
+                        # Friendly completion message
+                        file_count = len(self.all_records)
+                        total_size = self.scanner.stats['total_size']
+                        completion_msgs = [
+                            f"🎉 Found {file_count:,} files ({bytes_to_readable(total_size)}) - Ready to clean!",
+                            f"✨ Scan complete! {file_count:,} files found, {bytes_to_readable(total_size)} total",
+                            f"🚀 Done scanning! {file_count:,} files ready for review",
+                        ]
+                        self.status_label.config(text=completion_msgs[file_count % len(completion_msgs)])
                         self.current_file_label.config(text="")
+                        
                         # Apply initial filters
                         self.apply_filters()
+                        # Update visualization
+                        self.update_visualization()
+                        
+                        # Suggest next action if files found
+                        if file_count > 0:
+                            safe_count = sum(1 for r in self.all_records.values() if r['safe'] and "Safe" in r['action'])
+                            if safe_count > 0:
+                                self.root.after(1000, lambda: self._suggest_ai_action(safe_count))
                     
                     elif cmd == 'error':
                         messagebox.showerror("Scan Error", f"An error occurred:\n\n{data}")
                         self.is_scanning = False
+                    
+                    elif cmd == 'one_click_next':
+                        # Continue to next location in one-click cleanup
+                        self.one_click_scan_next_location()
         
         except queue.Empty:
             pass
+    
+    def _suggest_ai_action(self, safe_count):
+        """Suggest AI action after scan."""
+        if hasattr(self, 'ai_chat_text') and self.ai_chat_text.winfo_exists():
+            self.ai_chat_text.config(state=tk.NORMAL)
+            suggestion = f"\n💡 Tip: I found {safe_count:,} safe files! Try saying 'delete all safe files' to select them quickly! 😊\n"
+            self.ai_chat_text.insert(tk.END, suggestion)
+            self.ai_chat_text.see(tk.END)
+            self.ai_chat_text.config(state=tk.DISABLED)
         
         self.root.after(50, self._poll_queue)
     
@@ -902,6 +2195,330 @@ class DiskCleanupProfessional:
             if iid in self.tree.get_children():
                 self.tree.set(iid, "✓", "☐")
         self._update_selection_stats()
+    
+    def select_all_safe(self):
+        """Select all files marked as safe to delete."""
+        count = 0
+        for iid, rec in self.all_records.items():
+            if rec['safe'] and "Safe" in rec['action']:
+                rec['checked'] = True
+                count += 1
+                if iid in self.tree.get_children():
+                    self.tree.set(iid, "✓", "☑")
+        self._update_selection_stats()
+        self.status_label.config(text=f"Selected {count:,} safe files")
+    
+    def select_large_files(self, min_size_mb=100):
+        """Select all files larger than specified size."""
+        min_size_bytes = min_size_mb * 1024 * 1024
+        count = 0
+        for iid, rec in self.all_records.items():
+            if rec['size'] >= min_size_bytes and rec['safe']:
+                rec['checked'] = True
+                count += 1
+                if iid in self.tree.get_children():
+                    self.tree.set(iid, "✓", "☑")
+        self._update_selection_stats()
+        self.status_label.config(text=f"Selected {count:,} files larger than {min_size_mb}MB")
+    
+    def select_old_files(self, min_days=90):
+        """Select all files older than specified days."""
+        count = 0
+        for iid, rec in self.all_records.items():
+            if rec['age_days'] >= min_days and rec['safe']:
+                rec['checked'] = True
+                count += 1
+                if iid in self.tree.get_children():
+                    self.tree.set(iid, "✓", "☑")
+        self._update_selection_stats()
+        self.status_label.config(text=f"Selected {count:,} files older than {min_days} days")
+    
+    def find_duplicates(self):
+        """Find duplicate files by hash."""
+        if not self.all_records:
+            messagebox.showinfo("No Files", "Please scan some files first.")
+            return
+        
+        messagebox.showinfo("Finding Duplicates", "This may take a while for large scans...")
+        
+        # Group files by size first (quick filter)
+        size_groups = defaultdict(list)
+        for rec in self.all_records.values():
+            if rec['safe']:  # Only check safe files
+                size_groups[rec['size']].append(rec)
+        
+        # Find potential duplicates (same size)
+        potential_duplicates = {size: files for size, files in size_groups.items() if len(files) > 1}
+        
+        if not potential_duplicates:
+            messagebox.showinfo("No Duplicates", "No duplicate files found (by size).")
+            return
+        
+        # Hash files with same size
+        hash_groups = defaultdict(list)
+        total_to_check = sum(len(files) for files in potential_duplicates.values())
+        checked = 0
+        
+        for size, files in potential_duplicates.items():
+            for rec in files:
+                checked += 1
+                if checked % 10 == 0:
+                    self.status_label.config(text=f"Checking duplicates: {checked}/{total_to_check}")
+                    self.root.update()
+                
+                file_hash = get_file_hash(rec['path'])
+                if file_hash:
+                    hash_groups[file_hash].append(rec)
+        
+        # Find actual duplicates (same hash)
+        actual_duplicates = {h: files for h, files in hash_groups.items() if len(files) > 1}
+        
+        if not actual_duplicates:
+            messagebox.showinfo("No Duplicates", "No duplicate files found.")
+            return
+        
+        # Store duplicate groups
+        self.duplicate_groups = actual_duplicates
+        
+        # Show duplicates window
+        dup_window = tk.Toplevel(self.root)
+        dup_window.title("Duplicate Files Found")
+        dup_window.geometry("800x600")
+        
+        text_widget = tk.Text(dup_window, wrap=tk.WORD)
+        text_widget.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        text_content = f"Found {len(actual_duplicates)} groups of duplicate files:\n\n"
+        text_content += "=" * 70 + "\n\n"
+        
+        total_duplicate_size = 0
+        for i, (file_hash, files) in enumerate(actual_duplicates.items(), 1):
+            total_size = files[0]['size'] * (len(files) - 1)  # Size of duplicates (excluding one)
+            total_duplicate_size += total_size
+            
+            text_content += f"Group {i}: {len(files)} copies ({bytes_to_readable(files[0]['size'])} each)\n"
+            text_content += f"Wasted space: {bytes_to_readable(total_size)}\n"
+            text_content += "Files:\n"
+            for j, rec in enumerate(files):
+                marker = " [KEEP]" if j == 0 else " [DELETE]"
+                text_content += f"  {j+1}. {rec['path']}{marker}\n"
+            text_content += "\n" + "-" * 70 + "\n\n"
+        
+        text_content += f"\nTotal wasted space: {bytes_to_readable(total_duplicate_size)}\n"
+        text_content += "\nTip: Keep the first file in each group, delete the rest."
+        
+        text_widget.insert(1.0, text_content)
+        text_widget.config(state=tk.DISABLED)
+        
+        # Auto-select duplicates (all except first in each group)
+        selected_count = 0
+        for files in actual_duplicates.values():
+            for rec in files[1:]:  # Skip first file
+                if rec['path'] in self.all_records:
+                    self.all_records[rec['path']]['checked'] = True
+                    selected_count += 1
+        
+        self.apply_filters()
+        self._update_selection_stats()
+        
+        ttk.Button(dup_window, text="Close",
+                  command=dup_window.destroy).pack(pady=10)
+        
+        messagebox.showinfo("Duplicates Selected",
+                          f"Found {len(actual_duplicates)} duplicate groups.\n"
+                          f"Auto-selected {selected_count} duplicate files for deletion.")
+    
+    def sort_by_column(self, column):
+        """Sort treeview by column."""
+        # Toggle sort direction if same column
+        if self.sort_column == column:
+            self.sort_reverse = not self.sort_reverse
+        else:
+            self.sort_column = column
+            self.sort_reverse = True
+        
+        # Get all items with their values
+        items = []
+        for iid in self.tree.get_children():
+            values = self.tree.item(iid)['values']
+            rec = self.all_records.get(iid)
+            if rec:
+                # Get sort value based on column
+                col_index = list(self.tree['columns']).index(column)
+                if column == "Size":
+                    sort_value = rec['size']
+                elif column == "Age":
+                    sort_value = rec['age_days']
+                else:
+                    sort_value = values[col_index] if col_index < len(values) else ""
+                items.append((sort_value, iid, values))
+        
+        # Sort items
+        try:
+            items.sort(key=lambda x: x[0], reverse=self.sort_reverse)
+        except:
+            items.sort(key=lambda x: str(x[0]), reverse=self.sort_reverse)
+        
+        # Reorder in treeview
+        for sort_value, iid, values in items:
+            self.tree.move(iid, "", "end")
+        
+        # Update column header to show sort direction
+        for col in self.tree['columns']:
+            header = col
+            if col == self.sort_column:
+                header += " ▲" if self.sort_reverse else " ▼"
+            self.tree.heading(col, text=header)
+    
+    def update_visualization(self):
+        """Update the disk space visualization."""
+        if not self.all_records:
+            self.viz_label.config(text="Scan files to see space breakdown")
+            self.viz_canvas.delete("all")
+            return
+        
+        # Calculate breakdown by category
+        category_sizes = defaultdict(int)
+        for rec in self.all_records.values():
+            category_sizes[rec['category']] += rec['size']
+        
+        # Sort by size
+        sorted_categories = sorted(category_sizes.items(), key=lambda x: x[1], reverse=True)
+        
+        if not sorted_categories:
+            return
+        
+        # Draw visualization
+        self.viz_canvas.delete("all")
+        canvas_width = self.viz_canvas.winfo_width()
+        canvas_height = self.viz_canvas.winfo_height()
+        
+        if canvas_width < 10:  # Canvas not yet rendered
+            return
+        
+        # Draw bar chart
+        total_size = sum(size for _, size in sorted_categories)
+        max_size = max(size for _, size in sorted_categories)
+        
+        bar_width = (canvas_width - 40) / len(sorted_categories)
+        x = 20
+        colors = ['#e74c3c', '#3498db', '#2ecc71', '#f39c12', '#9b59b6', '#1abc9c', '#34495e']
+        
+        for i, (category, size) in enumerate(sorted_categories[:10]):  # Top 10
+            bar_height = (size / max_size) * (canvas_height - 60) if max_size > 0 else 0
+            color = colors[i % len(colors)]
+            
+            # Draw bar
+            self.viz_canvas.create_rectangle(
+                x, canvas_height - 40 - bar_height,
+                x + bar_width - 5, canvas_height - 40,
+                fill=color, outline="black", width=1
+            )
+            
+            # Draw label
+            percent = (size / total_size * 100) if total_size > 0 else 0
+            label = f"{category[:8]}\n{percent:.1f}%"
+            self.viz_canvas.create_text(
+                x + bar_width/2 - 2.5, canvas_height - 20,
+                text=label, font=("Segoe UI", 7), fill="black"
+            )
+            
+            x += bar_width
+        
+        # Update label
+        self.viz_label.config(
+            text=f"Top categories: {len(sorted_categories)} | Total: {bytes_to_readable(total_size)}"
+        )
+    
+    def export_results(self):
+        """Export scan results to JSON file."""
+        if not self.all_records:
+            messagebox.showinfo("No Data", "No scan results to export.")
+            return
+        
+        filename = filedialog.asksaveasfilename(
+            defaultextension=".json",
+            filetypes=[("JSON files", "*.json"), ("All files", "*.*")]
+        )
+        
+        if not filename:
+            return
+        
+        try:
+            export_data = {
+                'timestamp': datetime.now().isoformat(),
+                'scan_path': self.current_path,
+                'total_files': len(self.all_records),
+                'files': []
+            }
+            
+            for rec in self.all_records.values():
+                export_data['files'].append({
+                    'path': rec['path'],
+                    'size': rec['size'],
+                    'category': rec['category'],
+                    'age_days': rec['age_days'],
+                    'action': rec['action'],
+                    'safe': rec['safe']
+                })
+            
+            with open(filename, 'w', encoding='utf-8') as f:
+                json.dump(export_data, f, indent=2)
+            
+            messagebox.showinfo("Export Complete", f"Results exported to:\n{filename}")
+        except Exception as e:
+            messagebox.showerror("Export Error", f"Failed to export results:\n{str(e)}")
+    
+    def import_results(self):
+        """Import scan results from JSON file."""
+        filename = filedialog.askopenfilename(
+            filetypes=[("JSON files", "*.json"), ("All files", "*.*")]
+        )
+        
+        if not filename:
+            return
+        
+        try:
+            with open(filename, 'r', encoding='utf-8') as f:
+                import_data = json.load(f)
+            
+            # Clear current results
+            self.tree.delete(*self.tree.get_children())
+            self.all_records.clear()
+            
+            # Import files
+            for file_data in import_data.get('files', []):
+                path = file_data['path']
+                if os.path.exists(path):
+                    # Re-analyze file
+                    safe, reason = is_system_file_safe(path)
+                    rule = self.rule_manager.analyze(path)
+                    
+                    result = {
+                        'path': path,
+                        'size': file_data.get('size', os.path.getsize(path)),
+                        'size_display': bytes_to_readable(file_data.get('size', os.path.getsize(path))),
+                        'category': file_data.get('category', rule.get('category', 'Unknown')),
+                        'description': rule.get('description', ''),
+                        'action': file_data.get('action', rule.get('action', 'Review')),
+                        'confidence': rule.get('confidence', 50),
+                        'icon': rule.get('icon', '📄'),
+                        'age_days': file_data.get('age_days', get_file_age_days(path)),
+                        'project': get_project_type(path),
+                        'safe': file_data.get('safe', safe),
+                        'reason': reason,
+                        'checked': False
+                    }
+                    
+                    self.all_records[path] = result
+            
+            self.apply_filters()
+            self.update_visualization()
+            
+            messagebox.showinfo("Import Complete",
+                              f"Imported {len(self.all_records)} files from:\n{filename}")
+        except Exception as e:
+            messagebox.showerror("Import Error", f"Failed to import results:\n{str(e)}")
     
     def apply_filters(self):
         """Apply all filters to the view."""
@@ -957,6 +2574,8 @@ class DiskCleanupProfessional:
         
         self.status_label.config(text=f"Showing {filtered_count:,} of {len(self.all_records):,} files")
         self._update_selection_stats()
+        # Update visualization after filtering
+        self.root.after(100, self.update_visualization)
     
     def _update_selection_stats(self):
         """Update selection statistics."""
@@ -985,11 +2604,33 @@ class DiskCleanupProfessional:
             messagebox.showinfo("No Selection", "No files selected for deletion.")
             return
         
-        # Check for unsafe files
+        # Check for unsafe files and protected paths
         unsafe_files = []
+        protected_files = []
         for rec in selected:
             if not rec['safe']:
                 unsafe_files.append(rec['path'])
+            # Double-check protected paths
+            is_protected, protect_reason = is_path_protected(rec['path'])
+            if is_protected:
+                protected_files.append((rec['path'], protect_reason))
+        
+        # Remove protected files from selection
+        if protected_files:
+            protected_paths_list = "\n".join([f"• {path}" for path, _ in protected_files[:5]])
+            if len(protected_files) > 5:
+                protected_paths_list += f"\n... and {len(protected_files)-5} more"
+            
+            messagebox.showwarning(
+                "Protected Files",
+                f"Cannot delete {len(protected_files)} protected files!\n\n"
+                f"These files are in protected locations (Portfolio, OneDrive, etc.):\n\n"
+                f"{protected_paths_list}\n\n"
+                f"These files will be removed from selection."
+            )
+            # Remove protected files from selection
+            protected_paths = {path for path, _ in protected_files}
+            selected = [r for r in selected if r['path'] not in protected_paths]
         
         if unsafe_files:
             messagebox.showerror(
@@ -1078,9 +2719,20 @@ class DiskCleanupProfessional:
             if len(errors) > 3:
                 result_msg += f"\n... and {len(errors)-3} more"
         
+        # Show success message with personality
+        if deleted > 0:
+            success_msgs = [
+                f"🎉 Awesome! Successfully deleted {deleted} files!",
+                f"✨ Great job! {deleted} files removed and space freed!",
+                f"🚀 Perfect! {deleted} files deleted. Your disk is breathing easier now!",
+            ]
+            result_msg = success_msgs[deleted % len(success_msgs)] + "\n\n" + result_msg.split('\n', 1)[1] if '\n' in result_msg else result_msg
+        
         messagebox.showinfo("Deletion Complete", result_msg)
-        self.status_label.config(text=f"Deleted {deleted} files")
+        selected_size = sum(r['size'] for r in selected)
+        self.status_label.config(text=f"✅ Deleted {deleted} files - {bytes_to_readable(selected_size)} freed!")
         self.apply_filters()
+        self.update_visualization()
     
     def show_file_info(self, event):
         """Show detailed file information."""

@@ -1,0 +1,8 @@
+How to use
+
+run 
+.\.venv\Scripts\Activate
+with python installed and in the path
+
+then run
+python disk_scanner_final.py
