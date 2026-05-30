@@ -188,7 +188,7 @@ def is_system_file_safe(path):
             # But allow deleting installers in Downloads/Temp
             safe_dirs = ['\\downloads\\', '\\temp\\', '\\tmp\\', '\\cache\\']
             if any(safe_dir in path_lower for safe_dir in safe_dirs):
-                if pattern.endswith('\.exe$') or pattern.endswith('\.msi$'):
+                if pattern.endswith(r'\.exe$') or pattern.endswith(r'\.msi$'):
                     return True, "Installer in safe directory"
             return False, "System file detected"
     
@@ -221,21 +221,59 @@ def get_file_hash(path, chunk_size=8192):
     except:
         return None
 
+def normalize_scan_path(path):
+    """Normalize a path for deduplication comparisons."""
+    try:
+        return os.path.normcase(os.path.realpath(path))
+    except OSError:
+        return os.path.normcase(os.path.normpath(path))
+
+
+def dedupe_scan_locations(locations):
+    """Remove duplicate and nested/overlapping scan roots."""
+    entries = []
+    for loc in locations:
+        if not loc or not os.path.exists(loc):
+            continue
+        try:
+            real = os.path.realpath(loc)
+            norm = os.path.normcase(real)
+        except OSError:
+            continue
+        entries.append((loc, norm))
+
+    entries.sort(key=lambda item: len(item[1]))
+    result = []
+    kept_norms = []
+    sep = os.sep
+    for loc, norm in entries:
+        is_nested = False
+        for kept in kept_norms:
+            if norm == kept or norm.startswith(kept + sep):
+                is_nested = True
+                break
+        if is_nested:
+            continue
+        kept_norms.append(norm)
+        result.append(loc)
+    return result
+
+
 def get_common_locations():
     """Get list of common Windows cleanup locations."""
-    locations = []
+    raw_locations = []
     userprofile = os.environ.get('USERPROFILE', '')
     
     if sys.platform == "win32":
         # System temp
         if os.environ.get('TEMP'):
-            locations.append(os.environ.get('TEMP'))
+            raw_locations.append(os.environ.get('TEMP'))
         if os.environ.get('TMP'):
-            locations.append(os.environ.get('TMP'))
+            raw_locations.append(os.environ.get('TMP'))
         
         # User temp
         if userprofile:
-            locations.extend([
+            raw_locations.extend([
                 os.path.join(userprofile, 'AppData', 'Local', 'Temp'),
                 os.path.join(userprofile, 'AppData', 'Local', 'Microsoft', 'Windows', 'INetCache'),
                 os.path.join(userprofile, 'AppData', 'Local', 'Microsoft', 'Windows', 'Temporary Internet Files'),
@@ -250,10 +288,10 @@ def get_common_locations():
                 ]
                 for cache_path in cache_paths:
                     if os.path.exists(cache_path):
-                        locations.append(cache_path)
+                        raw_locations.append(cache_path)
                         break
     
-    return [loc for loc in locations if loc and os.path.exists(loc)]
+    return dedupe_scan_locations(raw_locations)
 
 # ============================================
 # AI AGENT - Natural Language Command Processor
@@ -320,8 +358,18 @@ class CleanupAI:
             else:
                 return 'delete_selected'
         
+        # Stats/Info commands (before show/find - "show stats" must not match find_files)
+        if any(word in command for word in ['stats', 'statistics', 'summary', 'how much']):
+            return 'show_stats'
+        
+        # Scan commands (before generic search)
+        if 'search for' in command:
+            return 'scan_location'
+        if 'scan' in command:
+            return 'scan_location'
+        
         # Find/Search/Show commands
-        elif any(word in command for word in ['find', 'search', 'show', 'list', 'display']):
+        if any(word in command for word in ['find', 'search', 'show', 'list', 'display']):
             if any(word in command for word in ['duplicate', 'duplicates']):
                 return 'find_duplicates'
             elif any(word in command for word in ['large', 'big', 'huge']):
@@ -332,20 +380,12 @@ class CleanupAI:
                 return 'find_files'
         
         # Protect/Exclude commands
-        elif any(word in command for word in ['protect', 'exclude', 'ignore', 'never delete', 'keep']):
+        if any(word in command for word in ['protect', 'exclude', 'ignore', 'never delete', 'keep']):
             return 'protect_path'
         
-        # Scan commands
-        elif any(word in command for word in ['scan', 'search for']):
-            return 'scan_location'
-        
         # Help/Info commands
-        elif any(word in command for word in ['help', 'what can', 'how', 'commands']):
+        if any(word in command for word in ['help', 'what can', 'how do', 'how to', 'commands']):
             return 'show_help'
-        
-        # Stats/Info commands
-        elif any(word in command for word in ['stats', 'statistics', 'summary', 'how much']):
-            return 'show_stats'
         
         return 'unknown'
     
@@ -725,20 +765,27 @@ class RuleManager:
             self.rules.append(rule)
             self.categories.add(rule["category"])
     
-    def analyze(self, path):
-        """Analyze file against rules."""
+    def analyze(self, path, file_size_bytes=None):
+        """Analyze file against rules (first match wins; optional size gates)."""
         path_lower = path.lower()
         
         for rule in self.rules:
+            min_mb = rule.get("min_size_mb")
+            if min_mb is not None:
+                if file_size_bytes is None:
+                    continue
+                if file_size_bytes < min_mb * 1024 * 1024:
+                    continue
+            
             if rule["regex"].search(path_lower):
                 return rule
         
         return {
-            "category": "Unknown",
-            "description": "Unclassified file",
+            "category": "Other Files",
+            "description": "Unclassified file — review before deleting",
             "action": "Review before deleting",
             "confidence": 30,
-            "icon": "❓"
+            "icon": "📄"
         }
     
     def get_all_categories(self):
@@ -748,6 +795,11 @@ class RuleManager:
 # ============================================
 # SCANNER ENGINE - FIXED PROGRESS TRACKING
 # ============================================
+SCAN_FILE_COUNT_CAP = 100000
+SCAN_PROGRESS_FILE_INTERVAL = 10
+SCAN_PROGRESS_TIME_INTERVAL = 0.15
+
+
 class ScannerEngine:
     def __init__(self, rule_manager):
         self.rule_manager = rule_manager
@@ -760,6 +812,69 @@ class ScannerEngine:
             'start_time': None,
             'end_time': None
         }
+    
+    def _is_reparse_point(self, path):
+        """Skip junctions/symlinks to avoid loops and ballooning walks."""
+        try:
+            if os.path.islink(path):
+                return True
+            if hasattr(os.path, 'isjunction') and os.path.isjunction(path):
+                return True
+        except OSError:
+            return True
+        return False
+    
+    def _should_skip_dir(self, dir_path):
+        """Check if directory should be skipped."""
+        if self._is_reparse_point(dir_path):
+            return True
+
+        skip_patterns = [
+            r'\\Windows\\',
+            r'\\Program Files\\',
+            r'\\ProgramData\\',
+            r'\\System Volume Information\\',
+            r'\\\$Recycle\.Bin\\',
+        ]
+        
+        dir_lower = dir_path.lower()
+        return any(re.search(pattern, dir_lower) for pattern in skip_patterns)
+    
+    def _filter_walk_dirs(self, root, dirs):
+        """Apply consistent directory filtering for count and scan walks."""
+        dirs[:] = [
+            d for d in dirs
+            if not self._should_skip_dir(os.path.join(root, d))
+        ]
+    
+    def _count_files(self, root_dir):
+        """Pre-count files using the same skip rules as the scan walk."""
+        total_files = 0
+        count_capped = False
+        for root, dirs, files in os.walk(root_dir):
+            self._filter_walk_dirs(root, dirs)
+            total_files += len(files)
+            if total_files >= SCAN_FILE_COUNT_CAP:
+                total_files = SCAN_FILE_COUNT_CAP
+                count_capped = True
+                break
+        return total_files, count_capped
+    
+    def _compute_progress(self, scanned, total_files, count_capped):
+        """Compute streaming progress; hold at 99% until scan truly completes."""
+        if total_files <= 0:
+            return 0
+        if count_capped or scanned > total_files:
+            return 99
+        return min(99, (scanned / total_files) * 100)
+    
+    def _should_emit_progress(self, scanned, last_progress_time):
+        """Emit progress on an interval so the UI stays responsive."""
+        if scanned == 0:
+            return True
+        if scanned % SCAN_PROGRESS_FILE_INTERVAL == 0:
+            return True
+        return (time.time() - last_progress_time) >= SCAN_PROGRESS_TIME_INTERVAL
     
     def scan(self, root_dir, min_size_mb=10, age_days=0, selected_categories=None):
         """Scan directory with filters."""
@@ -775,25 +890,19 @@ class ScannerEngine:
         
         min_size_bytes = min_size_mb * 1024 * 1024
         results = []
+        seen_paths = set()
         
         try:
-            # Count total files for progress - FIXED: Better counting
-            total_files = 0
-            for root, dirs, files in os.walk(root_dir):
-                # Skip system directories in counting too
-                dirs[:] = [d for d in dirs if not self._should_skip_dir(os.path.join(root, d))]
-                total_files += len(files)
-                if total_files > 100000:  # Cap for performance
-                    total_files = 100000
-                    break
-            
+            total_files, count_capped = self._count_files(root_dir)
             scanned = 0
+            last_progress_time = 0.0
+            yield ('progress', 0, scanned, total_files)
+            
             for root, dirs, files in os.walk(root_dir):
                 if self.stop_event.is_set():
                     break
                 
-                # Skip system directories
-                dirs[:] = [d for d in dirs if not self._should_skip_dir(os.path.join(root, d))]
+                self._filter_walk_dirs(root, dirs)
                 
                 for file in files:
                     if self.stop_event.is_set():
@@ -801,18 +910,18 @@ class ScannerEngine:
                     
                     try:
                         path = os.path.join(root, file)
+                        norm_path = normalize_scan_path(path)
                         self.current_file = path
                         scanned += 1
                         
-                        # FIXED: Percentage calculation - ensure it doesn't exceed 100%
-                        if total_files > 0:
-                            progress = min(100, (scanned / total_files * 100))  # MIN ensures <= 100
-                        else:
-                            progress = 0
-                        
-                        # Update progress every 10 files
-                        if scanned % 10 == 0:
+                        if self._should_emit_progress(scanned, last_progress_time):
+                            progress = self._compute_progress(scanned, total_files, count_capped)
                             yield ('progress', progress, scanned, total_files)
+                            last_progress_time = time.time()
+                        
+                        if norm_path in seen_paths:
+                            continue
+                        seen_paths.add(norm_path)
                         
                         # Skip if unsafe or protected
                         safe, reason = is_system_file_safe(path)
@@ -833,8 +942,8 @@ class ScannerEngine:
                         if age_days > 0 and age < age_days:
                             continue
                         
-                        # Analyze with rules
-                        rule = self.rule_manager.analyze(path)
+                        # Analyze with rules (size-aware for Large Files, etc.)
+                        rule = self.rule_manager.analyze(path, size)
                         
                         # Category filter
                         if selected_categories and rule['category'] not in selected_categories:
@@ -869,7 +978,7 @@ class ScannerEngine:
                 
                 self.stats['total_scanned'] = scanned
             
-            # Final progress update - FIXED: Always send 100%
+            # Final progress update - only reach 100% when scan is complete
             yield ('progress', 100, scanned, total_files)
             
             # Final stats
@@ -880,19 +989,6 @@ class ScannerEngine:
             yield ('error', str(e))
         
         yield ('complete', results, self.stats)
-    
-    def _should_skip_dir(self, dir_path):
-        """Check if directory should be skipped."""
-        skip_patterns = [
-            r'\\Windows\\',
-            r'\\Program Files\\',
-            r'\\ProgramData\\',
-            r'\\System Volume Information\\',
-            r'\\\$Recycle\.Bin\\',
-        ]
-        
-        dir_lower = dir_path.lower()
-        return any(re.search(pattern, dir_lower) for pattern in skip_patterns)
     
     def stop(self):
         """Stop scanning."""
@@ -950,6 +1046,7 @@ class DiskCleanupProfessional:
         self.show_welcome_screen()
         
         # Start queue polling
+        self._poll_queue_id = None
         self.root.after(100, self._poll_queue)
         
         # Center window
@@ -973,8 +1070,23 @@ class DiskCleanupProfessional:
         
         self.root.configure(bg=self.colors['bg'])
     
+    def _cancel_scheduled_callbacks(self, include_poll=False):
+        """Cancel pending after() callbacks when switching views."""
+        attrs = ['_welcome_anim_id', '_tip_rotate_id']
+        if include_poll:
+            attrs.append('_poll_queue_id')
+        for attr in attrs:
+            callback_id = getattr(self, attr, None)
+            if callback_id is not None:
+                try:
+                    self.root.after_cancel(callback_id)
+                except (tk.TclError, ValueError):
+                    pass
+                setattr(self, attr, None)
+    
     def show_welcome_screen(self):
         """Show welcome screen with quick start options."""
+        self._cancel_scheduled_callbacks()
         # Clear existing widgets
         for widget in self.root.winfo_children():
             widget.destroy()
@@ -1060,14 +1172,19 @@ class DiskCleanupProfessional:
         
         # Add subtle animation hint
         def animate_ai_button():
-            current_bg = ai_btn.cget('bg')
-            if current_bg == "#9b59b6":
-                ai_btn.config(bg="#8e44ad")
-            else:
-                ai_btn.config(bg="#9b59b6")
-            self.root.after(1500, animate_ai_button)
+            try:
+                if not ai_btn.winfo_exists():
+                    return
+                current_bg = ai_btn.cget('bg')
+                if current_bg == "#9b59b6":
+                    ai_btn.config(bg="#8e44ad")
+                else:
+                    ai_btn.config(bg="#9b59b6")
+                self._welcome_anim_id = self.root.after(1500, animate_ai_button)
+            except tk.TclError:
+                return
         
-        self.root.after(1000, animate_ai_button)
+        self._welcome_anim_id = self.root.after(1000, animate_ai_button)
         
         # Info text with better formatting
         info_frame = ttk.Frame(welcome_frame)
@@ -1087,6 +1204,7 @@ class DiskCleanupProfessional:
     
     def show_main_ui(self):
         """Show the main application UI."""
+        self._cancel_scheduled_callbacks()
         # Clear existing widgets
         for widget in self.root.winfo_children():
             widget.destroy()
@@ -1747,13 +1865,18 @@ class DiskCleanupProfessional:
         
         # Rotate tips
         def rotate_tip():
-            current_tip = self.tip_label.cget('text')
-            current_index = tips.index(current_tip) if current_tip in tips else 0
-            next_index = (current_index + 1) % len(tips)
-            self.tip_label.config(text=tips[next_index])
-            self.root.after(10000, rotate_tip)  # Change tip every 10 seconds
+            try:
+                if not self.tip_label.winfo_exists():
+                    return
+                current_tip = self.tip_label.cget('text')
+                current_index = tips.index(current_tip) if current_tip in tips else 0
+                next_index = (current_index + 1) % len(tips)
+                self.tip_label.config(text=tips[next_index])
+                self._tip_rotate_id = self.root.after(10000, rotate_tip)
+            except tk.TclError:
+                return
         
-        self.root.after(10000, rotate_tip)
+        self._tip_rotate_id = self.root.after(10000, rotate_tip)
     
     def _set_all_categories(self, state):
         """Select all or no categories."""
@@ -1794,8 +1917,8 @@ class DiskCleanupProfessional:
             self.root.update()
             time.sleep(0.1)  # Brief pause for UI to render
         
-        # Get all common locations
-        locations = get_common_locations()
+        # Get all common locations (deduped: TEMP/TMP/AppData\Local\Temp collapse)
+        locations = dedupe_scan_locations(get_common_locations())
         if not locations:
             messagebox.showwarning("No Locations", "Could not find common cleanup locations.")
             return
@@ -1818,7 +1941,7 @@ class DiskCleanupProfessional:
         self.all_records.clear()
         
         # Set scan parameters for one-click (lower threshold, all categories)
-        self.min_mb_var.set(1)  # Lower threshold
+        self.min_mb_var.set(5)  # Focus on meaningful cleanup targets
         self.age_days_var.set(0)  # All ages
         
         # Store locations to scan
@@ -1847,7 +1970,7 @@ class DiskCleanupProfessional:
         selected_categories = list(self.rule_manager.get_all_categories())
         self.scan_thread = threading.Thread(
             target=self._one_click_scan_worker,
-            args=(location, 1, 0, selected_categories),
+            args=(location, self.min_mb_var.get(), 0, selected_categories),
             daemon=True
         )
         self.scan_thread.start()
@@ -1861,11 +1984,11 @@ class DiskCleanupProfessional:
             for item in scan_gen:
                 if item[0] == 'progress':
                     _, progress, scanned, total = item
-                    # Adjust progress for multi-location scan
+                    # Adjust progress for multi-location scan; clamp to 99 until all done
                     base_progress = (self.one_click_current_location / len(self.one_click_locations)) * 100
-                    location_progress = (progress / len(self.one_click_locations))
+                    location_progress = (min(99, progress) / len(self.one_click_locations))
                     total_progress = base_progress + location_progress
-                    self.scan_queue.put(('progress', (min(100, total_progress), scanned, total)))
+                    self.scan_queue.put(('progress', (min(99, total_progress), scanned, total)))
                 
                 elif item[0] == 'result':
                     _, result = item
@@ -2028,72 +2151,85 @@ class DiskCleanupProfessional:
         except Exception as e:
             self.scan_queue.put(('error', str(e)))
     
+    def _upsert_result_row(self, result):
+        """Insert or update a result row without duplicate-iid crashes."""
+        iid = result['path']
+        self.all_records[iid] = result
+        
+        if not result['safe']:
+            safety = "🔴"
+            color = 'danger'
+        elif "Safe" in result['action']:
+            safety = "🟢"
+            color = 'safe'
+        elif "Review" in result['action']:
+            safety = "🟡"
+            color = 'warning'
+        else:
+            safety = "⚪"
+            color = 'neutral'
+        
+        values = (
+            "☐",
+            result.get('icon', '📄'),
+            result['size_display'],
+            f"{result['age_days']}d",
+            result['category'],
+            safety,
+            result['action'],
+            result['path']
+        )
+        
+        if self.tree.exists(iid):
+            self.tree.item(iid, values=values)
+        else:
+            self.tree.insert("", "end", iid=iid, values=values)
+        
+        if color == 'danger':
+            self.tree.tag_configure('danger', foreground=self.colors['danger'])
+            self.tree.item(iid, tags=('danger',))
+        elif color == 'warning':
+            self.tree.tag_configure('warning', foreground=self.colors['warning'])
+            self.tree.item(iid, tags=('warning',))
+        elif color == 'safe':
+            self.tree.tag_configure('safe', foreground=self.colors['safe'])
+            self.tree.item(iid, tags=('safe',))
+    
     def _poll_queue(self):
         """Poll the queue for updates."""
         try:
+            if not self.root.winfo_exists():
+                return
+        except tk.TclError:
+            return
+        try:
             while True:
-                item = self.scan_queue.get_nowait()
+                try:
+                    item = self.scan_queue.get_nowait()
+                except queue.Empty:
+                    break
                 
-                if isinstance(item, tuple):
+                try:
+                    if not isinstance(item, tuple):
+                        continue
+                    
                     cmd, data = item
                     
                     if cmd == 'progress':
                         progress, scanned, total = data
-                        # FIXED: Ensure progress never exceeds 100
                         progress = min(100, progress)
                         self.progress_bar['value'] = progress
                         self.progress_percent.config(text=f"{progress:.1f}%")
                         self.status_label.config(
                             text=f"Scanned: {scanned:,} of {total:,} files"
                         )
-                        # Update current file from scanner
                         current_file = self.scanner.current_file
                         if len(current_file) > 80:
                             current_file = "..." + current_file[-77:]
                         self.current_file_label.config(text=current_file)
                     
                     elif cmd == 'result':
-                        result = data
-                        iid = result['path']
-                        self.all_records[iid] = result
-                        
-                        # Determine safety color
-                        if not result['safe']:
-                            safety = "🔴"
-                            color = 'danger'
-                        elif "Safe" in result['action']:
-                            safety = "🟢"
-                            color = 'safe'
-                        elif "Review" in result['action']:
-                            safety = "🟡"
-                            color = 'warning'
-                        else:
-                            safety = "⚪"
-                            color = 'neutral'
-                        
-                        values = (
-                            "☐",
-                            result.get('icon', '📄'),
-                            result['size_display'],
-                            f"{result['age_days']}d",
-                            result['category'],
-                            safety,
-                            result['action'],
-                            result['path']
-                        )
-                        
-                        self.tree.insert("", "end", iid=iid, values=values)
-                        
-                        # Apply color
-                        if color == 'danger':
-                            self.tree.tag_configure('danger', foreground=self.colors['danger'])
-                            self.tree.item(iid, tags=('danger',))
-                        elif color == 'warning':
-                            self.tree.tag_configure('warning', foreground=self.colors['warning'])
-                            self.tree.item(iid, tags=('warning',))
-                        elif color == 'safe':
-                            self.tree.tag_configure('safe', foreground=self.colors['safe'])
-                            self.tree.item(iid, tags=('safe',))
+                        self._upsert_result_row(data)
                     
                     elif cmd == 'stats':
                         stats = data
@@ -2101,7 +2237,6 @@ class DiskCleanupProfessional:
                         self.stats_labels['total_size'].config(text=bytes_to_readable(stats['total_size']))
                         self.stats_labels['time'].config(text=f"{stats['end_time'] - stats['start_time']:.1f}s")
                         
-                        # Calculate potential savings
                         safe_size = 0
                         for rec in self.all_records.values():
                             if "Safe" in rec['action']:
@@ -2110,16 +2245,16 @@ class DiskCleanupProfessional:
                         self.stats_labels['potential'].config(text=bytes_to_readable(safe_size))
                         self.stats['potential_savings'] = safe_size
                         
-                        # Calculate top 5 files size
                         sorted_files = sorted(self.all_records.values(), key=lambda x: x['size'], reverse=True)
                         top5_size = sum(f['size'] for f in sorted_files[:5])
                         self.stats_labels['top5'].config(text=bytes_to_readable(top5_size))
                     
                     elif cmd == 'complete':
                         self.is_scanning = False
+                        self.progress_bar['value'] = 100
+                        self.progress_percent.config(text="100.0%")
                         self.progress_text.config(text="✅ Scan complete!")
                         
-                        # Friendly completion message
                         file_count = len(self.all_records)
                         total_size = self.scanner.stats['total_size']
                         completion_msgs = [
@@ -2130,12 +2265,9 @@ class DiskCleanupProfessional:
                         self.status_label.config(text=completion_msgs[file_count % len(completion_msgs)])
                         self.current_file_label.config(text="")
                         
-                        # Apply initial filters
                         self.apply_filters()
-                        # Update visualization
                         self.update_visualization()
                         
-                        # Suggest next action if files found
                         if file_count > 0:
                             safe_count = sum(1 for r in self.all_records.values() if r['safe'] and "Safe" in r['action'])
                             if safe_count > 0:
@@ -2146,10 +2278,19 @@ class DiskCleanupProfessional:
                         self.is_scanning = False
                     
                     elif cmd == 'one_click_next':
-                        # Continue to next location in one-click cleanup
                         self.one_click_scan_next_location()
+                
+                except Exception as e:
+                    print(f"Poll queue item error: {e}")
         
         except queue.Empty:
+            pass
+        
+        # Reschedule polling unless window is closing
+        try:
+            if self.root.winfo_exists():
+                self._poll_queue_id = self.root.after(100, self._poll_queue)
+        except tk.TclError:
             pass
     
     def _suggest_ai_action(self, safe_count):
@@ -2160,8 +2301,6 @@ class DiskCleanupProfessional:
             self.ai_chat_text.insert(tk.END, suggestion)
             self.ai_chat_text.see(tk.END)
             self.ai_chat_text.config(state=tk.DISABLED)
-        
-        self.root.after(50, self._poll_queue)
     
     # ============================================
     # SELECTION AND FILTERING - UPDATED WITH DROPDOWN
@@ -2492,11 +2631,12 @@ class DiskCleanupProfessional:
                 if os.path.exists(path):
                     # Re-analyze file
                     safe, reason = is_system_file_safe(path)
-                    rule = self.rule_manager.analyze(path)
+                    file_size = file_data.get('size', os.path.getsize(path))
+                    rule = self.rule_manager.analyze(path, file_size)
                     
                     result = {
                         'path': path,
-                        'size': file_data.get('size', os.path.getsize(path)),
+                        'size': file_size,
                         'size_display': bytes_to_readable(file_data.get('size', os.path.getsize(path))),
                         'category': file_data.get('category', rule.get('category', 'Unknown')),
                         'description': rule.get('description', ''),
@@ -2818,6 +2958,7 @@ class DiskCleanupProfessional:
     
     def on_closing(self):
         """Handle window closing."""
+        self._cancel_scheduled_callbacks(include_poll=True)
         if self.is_scanning:
             if messagebox.askyesno("Scan in Progress",
                                   "A scan is in progress. Stop it and quit?"):
@@ -2831,6 +2972,11 @@ class DiskCleanupProfessional:
 # MAIN ENTRY POINT
 # ============================================
 if __name__ == "__main__":
+    if sys.platform == "win32":
+        try:
+            sys.stdout.reconfigure(encoding="utf-8")
+        except (AttributeError, OSError):
+            pass
     print("""
     ╔══════════════════════════════════════════════════════════╗
     ║                DISK CLEANUP PROFESSIONAL                 ║

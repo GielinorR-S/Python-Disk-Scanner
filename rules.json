@@ -4,7 +4,7 @@
     "description": "Node.js dependencies (can be reinstalled)",
     "action": "Safe to delete",
     "confidence": 95,
-    "match": "node_modules",
+    "match": "[/\\\\]node_modules[/\\\\]",
     "icon": "📦"
   },
   {
@@ -12,112 +12,56 @@
     "description": "Python virtual environments",
     "action": "Safe if rebuildable",
     "confidence": 90,
-    "match": "\\.venv|\\.env|venv",
+    "match": "[/\\\\]\\.venv[/\\\\]|[/\\\\]venv[/\\\\]|[/\\\\]\\.env[/\\\\]",
     "icon": "🐍"
   },
   {
+    "category": "Python Cache",
+    "description": "Python bytecode and cache",
+    "action": "Safe to delete",
+    "confidence": 90,
+    "match": "[/\\\\]__pycache__[/\\\\]|\\.pyc$|\\.pyo$",
+    "icon": "🐍"
+  },
+  {
+    "category": "Git Data",
+    "description": "Git repository objects",
+    "action": "Review before deleting",
+    "confidence": 70,
+    "match": "[/\\\\]\\.git[/\\\\]",
+    "icon": "🔀"
+  },
+  {
     "category": "Build Output",
-    "description": "Compiled/transpiled code",
+    "description": "Compiled/transpiled output folders",
     "action": "Safe if rebuildable",
     "confidence": 90,
-    "match": "dist|build|out|target|bin|obj",
+    "match": "[/\\\\](dist|build|out|target)[/\\\\]",
     "icon": "🔨"
   },
   {
-    "category": "Installers",
-    "description": "Downloaded installer files",
-    "action": "Review before deleting",
-    "confidence": 75,
-    "match": "\\.exe$|\\.msi$|\\.dmg$|\\.pkg$",
-    "icon": "📥"
+    "category": "Recycle Bin",
+    "description": "Recycle Bin contents",
+    "action": "Safe to delete",
+    "confidence": 95,
+    "match": "\\\\\\$Recycle\\.Bin[/\\\\]",
+    "icon": "🗑️"
   },
   {
-    "category": "Archives",
-    "description": "Compressed files",
-    "action": "Review before deleting",
-    "confidence": 70,
-    "match": "\\.zip$|\\.rar$|\\.7z$|\\.tar$|\\.gz$",
-    "icon": "🗜️"
+    "category": "Windows Temp",
+    "description": "Windows temporary files",
+    "action": "Safe to delete",
+    "confidence": 95,
+    "match": "[/\\\\]Windows[/\\\\]Temp[/\\\\]|Temporary Internet Files",
+    "icon": "🗂️"
   },
   {
     "category": "System Cache",
     "description": "Temporary system files",
     "action": "Safe to delete",
     "confidence": 95,
-    "match": "Temp|tmp|\\.tmp$|\\.temp$|\\\\.cache",
+    "match": "[/\\\\]Temp[/\\\\]|[/\\\\]tmp[/\\\\]|\\.tmp$|\\.temp$",
     "icon": "💾"
-  },
-  {
-    "category": "Logs",
-    "description": "Application log files",
-    "action": "Safe to delete",
-    "confidence": 85,
-    "match": "\\.log$",
-    "icon": "📝"
-  },
-  {
-    "category": "Browser Cache",
-    "description": "Browser temporary files",
-    "action": "Safe to delete",
-    "confidence": 90,
-    "match": "Cache|Caches|cache2|GPUCache",
-    "icon": "🌐"
-  },
-  {
-    "category": "Backups",
-    "description": "Backup/duplicate files",
-    "action": "Review before deleting",
-    "confidence": 75,
-    "match": "\\.bak$|\\.backup$|\\.old$|\\.orig$|~$",
-    "icon": "💾"
-  },
-  {
-    "category": "Package Cache",
-    "description": "Package manager cache",
-    "action": "Safe to delete",
-    "confidence": 85,
-    "match": "\\.npm|\\.pip|\\.cache|yarn-cache",
-    "icon": "📦"
-  },
-  {
-    "category": "IDE Cache",
-    "description": "Editor/IDE cache files",
-    "action": "Safe to delete",
-    "confidence": 80,
-    "match": "\\.idea|\\.vscode|\\.vs|\\.project",
-    "icon": "⚡"
-  },
-  {
-    "category": "Downloads",
-    "description": "Partial downloads",
-    "action": "Safe to delete",
-    "confidence": 90,
-    "match": "\\.crdownload$|\\.part$|\\.download$",
-    "icon": "⬇️"
-  },
-  {
-    "category": "Thumbnails",
-    "description": "Image thumbnail cache",
-    "action": "Safe to delete",
-    "confidence": 95,
-    "match": "Thumbnails|thumbcache_",
-    "icon": "🖼️"
-  },
-  {
-    "category": "Crash Dumps",
-    "description": "Application crash reports",
-    "action": "Safe to delete",
-    "confidence": 95,
-    "match": "\\.dmp$|\\.crash$",
-    "icon": "💥"
-  },
-  {
-    "category": "Media Cache",
-    "description": "Media player cache files",
-    "action": "Safe to delete",
-    "confidence": 85,
-    "match": "\\.cache$|\\.media$",
-    "icon": "🎬"
   },
   {
     "category": "Windows Update",
@@ -128,43 +72,220 @@
     "icon": "🔄"
   },
   {
-    "category": "Old Logs",
-    "description": "Old application log files",
+    "category": "Browser Cache",
+    "description": "Browser temporary files",
     "action": "Safe to delete",
     "confidence": 90,
-    "match": "logs|Logs|LOG",
-    "icon": "📋"
+    "match": "[/\\\\]Cache[/\\\\]|[/\\\\]Caches[/\\\\]|GPUCache|cache2",
+    "icon": "🌐"
   },
   {
     "category": "Browser History",
-    "description": "Old browser history files",
+    "description": "Browser history databases",
     "action": "Review before deleting",
     "confidence": 70,
-    "match": "History|history|History2",
+    "match": "[/\\\\]History[/\\\\]|History-journal",
     "icon": "🌍"
   },
   {
-    "category": "Empty Folders",
-    "description": "Empty directories",
+    "category": "Package Cache",
+    "description": "Package manager cache",
     "action": "Safe to delete",
-    "confidence": 95,
-    "match": "^$",
-    "icon": "📁"
+    "confidence": 85,
+    "match": "[/\\\\]\\.npm[/\\\\]|[/\\\\]\\.pip[/\\\\]|yarn-cache|[/\\\\]pip-cache[/\\\\]",
+    "icon": "📦"
   },
   {
-    "category": "Recycle Bin",
-    "description": "Recycle Bin contents",
+    "category": "Maven Cache",
+    "description": "Maven repository cache",
     "action": "Safe to delete",
-    "confidence": 95,
-    "match": "\\$Recycle\\.Bin",
-    "icon": "🗑️"
+    "confidence": 90,
+    "match": "[/\\\\]\\.m2[/\\\\]|[/\\\\]maven[/\\\\]repository",
+    "icon": "📦"
   },
   {
-    "category": "Windows Temp",
-    "description": "Windows temporary files",
+    "category": "Gradle Cache",
+    "description": "Gradle build cache",
+    "action": "Safe to delete",
+    "confidence": 90,
+    "match": "[/\\\\]\\.gradle[/\\\\]|gradle-cache",
+    "icon": "📦"
+  },
+  {
+    "category": "IDE Cache",
+    "description": "Editor/IDE cache files",
+    "action": "Safe to delete",
+    "confidence": 80,
+    "match": "[/\\\\]\\.idea[/\\\\]|[/\\\\]\\.vscode[/\\\\]|[/\\\\]\\.vs[/\\\\]",
+    "icon": "⚡"
+  },
+  {
+    "category": "Eclipse Cache",
+    "description": "Eclipse IDE workspace and cache files",
+    "action": "Safe to delete",
+    "confidence": 85,
+    "match": "[/\\\\]\\.metadata[/\\\\]|eclipse-workspace|eclipse\\.cache",
+    "icon": "☀️"
+  },
+  {
+    "category": "Visual Studio Cache",
+    "description": "Visual Studio cache and temporary files",
+    "action": "Safe to delete",
+    "confidence": 85,
+    "match": "[/\\\\]\\.vs[/\\\\]|Visual Studio|MSBuild|vscode-cpptools",
+    "icon": "💻"
+  },
+  {
+    "category": "IntelliJ Cache",
+    "description": "IntelliJ IDEA cache files",
+    "action": "Safe to delete",
+    "confidence": 85,
+    "match": "IntelliJIdea|[/\\\\]jetbrains[/\\\\]",
+    "icon": "🧠"
+  },
+  {
+    "category": "Thumbnails",
+    "description": "Image thumbnail cache",
     "action": "Safe to delete",
     "confidence": 95,
-    "match": "Windows\\\\Temp|Temporary Internet Files",
-    "icon": "🗂️"
+    "match": "Thumbnails|thumbcache_",
+    "icon": "🖼️"
+  },
+  {
+    "category": "Logs",
+    "description": "Application log files",
+    "action": "Safe to delete",
+    "confidence": 85,
+    "match": "\\.log$|\\.log\\.",
+    "icon": "📝"
+  },
+  {
+    "category": "Old Logs",
+    "description": "Log directories and rotated logs",
+    "action": "Safe to delete",
+    "confidence": 90,
+    "match": "[/\\\\]logs[/\\\\]|[/\\\\]Logs[/\\\\]|\\.log\\.\\d+$",
+    "icon": "📋"
+  },
+  {
+    "category": "Crash Dumps",
+    "description": "Application crash reports",
+    "action": "Safe to delete",
+    "confidence": 95,
+    "match": "\\.dmp$|\\.crash$",
+    "icon": "💥"
+  },
+  {
+    "category": "Downloads",
+    "description": "Partial or incomplete downloads",
+    "action": "Safe to delete",
+    "confidence": 90,
+    "match": "\\.crdownload$|\\.part$|\\.download$",
+    "icon": "⬇️"
+  },
+  {
+    "category": "Downloads Folder",
+    "description": "Files in your Downloads folder",
+    "action": "Review before deleting",
+    "confidence": 65,
+    "match": "[/\\\\]Downloads[/\\\\]",
+    "icon": "⬇️"
+  },
+  {
+    "category": "Backups",
+    "description": "Backup/duplicate files",
+    "action": "Review before deleting",
+    "confidence": 75,
+    "match": "\\.bak$|\\.backup$|\\.old$|\\.orig$|~$",
+    "icon": "💾"
+  },
+  {
+    "category": "Installers",
+    "description": "Downloaded installer files",
+    "action": "Review before deleting",
+    "confidence": 75,
+    "match": "\\.exe$|\\.msi$|\\.dmg$|\\.pkg$|\\.iso$",
+    "icon": "📥"
+  },
+  {
+    "category": "Archives",
+    "description": "Compressed archives",
+    "action": "Review before deleting",
+    "confidence": 70,
+    "match": "\\.zip$|\\.rar$|\\.7z$|\\.tar$|\\.gz$|\\.bz2$",
+    "icon": "🗜️"
+  },
+  {
+    "category": "Videos",
+    "description": "Video files",
+    "action": "Review before deleting",
+    "confidence": 60,
+    "match": "\\.(mp4|mkv|avi|mov|wmv|webm|m4v|flv)$",
+    "icon": "🎬"
+  },
+  {
+    "category": "Images",
+    "description": "Image and photo files",
+    "action": "Review before deleting",
+    "confidence": 60,
+    "match": "\\.(jpg|jpeg|png|gif|webp|bmp|svg|ico|heic|raw)$",
+    "icon": "🖼️"
+  },
+  {
+    "category": "Audio",
+    "description": "Music and audio files",
+    "action": "Review before deleting",
+    "confidence": 60,
+    "match": "\\.(mp3|wav|flac|aac|ogg|wma|m4a)$",
+    "icon": "🎵"
+  },
+  {
+    "category": "Documents",
+    "description": "Office and document files",
+    "action": "Review before deleting",
+    "confidence": 60,
+    "match": "\\.(pdf|docx?|xlsx?|pptx?|txt|rtf|odt|csv)$",
+    "icon": "📄"
+  },
+  {
+    "category": "Source Code",
+    "description": "Programming source files",
+    "action": "Review before deleting",
+    "confidence": 55,
+    "match": "\\.(py|js|ts|jsx|tsx|java|cs|cpp|c|h|go|rs|php|rb|swift|kt|sql|html|css|scss)$",
+    "icon": "💻"
+  },
+  {
+    "category": "Databases",
+    "description": "Database files",
+    "action": "Review before deleting",
+    "confidence": 65,
+    "match": "\\.(db|sqlite|sqlite3|mdb|accdb)$",
+    "icon": "🗄️"
+  },
+  {
+    "category": "Game Data",
+    "description": "Game saves and cache",
+    "action": "Review before deleting",
+    "confidence": 55,
+    "match": "[/\\\\]Steam[/\\\\]|[/\\\\]Epic Games[/\\\\]|\\.sav$|\\.pak$",
+    "icon": "🎮"
+  },
+  {
+    "category": "Media Cache",
+    "description": "Media player cache files",
+    "action": "Safe to delete",
+    "confidence": 85,
+    "match": "\\.cache$",
+    "icon": "🎬"
+  },
+  {
+    "category": "Large Files",
+    "description": "Very large files (500MB or more)",
+    "action": "Review before deleting",
+    "confidence": 70,
+    "min_size_mb": 500,
+    "match": ".",
+    "icon": "💾"
   }
 ]
