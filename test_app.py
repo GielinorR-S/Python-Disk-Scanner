@@ -432,7 +432,8 @@ def test_gui_scan_and_selection(dsf, tree, dialogs):
     assert_eq("clear_all clears checks", sum(1 for r in app.all_records.values() if r.get("checked")), 0)
 
     app.select_all()
-    assert_true("select_all selects visible", len(app.tree.get_children()) > 0)
+    visible = list(app._iter_visible_file_iids())
+    assert_true("select_all selects visible", len(visible) > 0 and all(app.all_records[i]["checked"] for i in visible))
 
     app.select_large_files(0)
     app.select_old_files(0)
@@ -449,27 +450,108 @@ def test_gui_scan_and_selection(dsf, tree, dialogs):
 
 
 def test_gui_toggle_check(dsf, tree, app, root):
-    children = app.tree.get_children()
-    if not children:
-        fail("toggle_check has rows", "no tree rows")
+    file_iid = None
+    for top in app.tree.get_children():
+        if top in app.group_children and app.group_children[top]:
+            file_iid = app.group_children[top][0]
+            break
+        if top in app.all_records:
+            file_iid = top
+            break
+    if not file_iid:
+        fail("toggle_check has rows", "no file rows")
         return
-    iid = children[0]
-    rec = app.all_records[iid]
+
+    rec = app.all_records[file_iid]
     rec["checked"] = False
-    app.tree.set(iid, "✓", "☐")
+    app.tree.set(file_iid, "✓", "☐")
 
     class FakeEvent:
         def __init__(self, y, x):
             self.y = y
             self.x = x
 
-    bbox = app.tree.bbox(iid, "#1")
+    bbox = app.tree.bbox(file_iid, "#1")
     if bbox:
         event = FakeEvent(bbox[1] + 2, bbox[0] + 2)
         app.toggle_check(event)
-        assert_true("toggle_check toggles", app.all_records[iid]["checked"])
+        assert_true("toggle_check toggles", app.all_records[file_iid]["checked"])
     else:
         ok("toggle_check skipped (no bbox in headless)")
+
+
+def test_grouping_by_folder(dsf, app, root):
+    app.group_mode_var.set("Folder")
+    app.apply_filters()
+    assert_true("folder groups created", len(app.group_children) >= 1)
+    total_children = sum(len(v) for v in app.group_children.values())
+    assert_eq("folder group child count", total_children, len(app._get_filtered_records()))
+
+
+def test_grouping_by_category(dsf, app, root):
+    app.group_mode_var.set("Category")
+    app.apply_filters()
+    assert_true("category groups created", len(app.group_children) >= 1)
+    cats = set()
+    for group_iid, child_iids in app.group_children.items():
+        for cid in child_iids:
+            cats.add(app.all_records[cid]["category"])
+    assert_true("category groups contain records", len(cats) >= 1)
+
+
+def test_group_select_all_children(dsf, app, root):
+    app.group_mode_var.set("Folder")
+    app.apply_filters()
+    app.clear_all()
+    group_iid = next(iter(app.group_children))
+    children = app.group_children[group_iid]
+
+    class FakeEvent:
+        def __init__(self, y, x):
+            self.y = y
+            self.x = x
+
+    bbox = app.tree.bbox(group_iid, "#1")
+    if bbox:
+        app.toggle_check(FakeEvent(bbox[1] + 2, bbox[0] + 2))
+        assert_true("group select all children", all(app.all_records[c]["checked"] for c in children))
+        assert_eq("group glyph all selected", app._group_checkbox_glyph(children), "☑")
+    else:
+        for child in children:
+            app.all_records[child]["checked"] = True
+        app._refresh_group_glyph(group_iid)
+        assert_eq("group glyph all selected (direct)", app._group_checkbox_glyph(children), "☑")
+
+
+def test_group_partial_glyph(dsf, app, root):
+    app.group_mode_var.set("Folder")
+    app.apply_filters()
+    group_iid = next(iter(app.group_children))
+    children = app.group_children[group_iid]
+    if len(children) < 2:
+        ok("partial glyph skipped (single child group)")
+        return
+    app.clear_all()
+    app.all_records[children[0]]["checked"] = True
+    app._refresh_group_glyph(group_iid)
+    assert_eq("partial group glyph", app._group_checkbox_glyph(children), "◪")
+
+
+def test_expand_collapse_groups(dsf, app, root):
+    app.group_mode_var.set("Folder")
+    app.apply_filters()
+    app._expand_all_groups()
+    app._collapse_all_groups()
+    ok("expand and collapse all groups")
+
+
+def test_select_all_safe_group_glyphs(dsf, app, root):
+    app.group_mode_var.set("Folder")
+    app.apply_filters()
+    app.select_all_safe()
+    for group_iid, children in app.group_children.items():
+        glyph = app._group_checkbox_glyph(children)
+        assert_true(f"group glyph valid after select_all_safe: {group_iid}", glyph in ("☐", "☑", "◪"))
 
 
 def test_gui_duplicates(dsf, tree, app, root, dialogs):
@@ -642,6 +724,12 @@ def main():
 
             print("\n[GUI - headless]")
             root, app = test_gui_scan_and_selection(dsf, tree, dialogs)
+            test_grouping_by_folder(dsf, app, root)
+            test_grouping_by_category(dsf, app, root)
+            test_group_select_all_children(dsf, app, root)
+            test_group_partial_glyph(dsf, app, root)
+            test_expand_collapse_groups(dsf, app, root)
+            test_select_all_safe_group_glyphs(dsf, app, root)
             test_gui_toggle_check(dsf, tree, app, root)
             test_gui_duplicates(dsf, tree, app, root, dialogs)
             test_gui_export_import(dsf, tree, app, root, tmpdir)

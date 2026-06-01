@@ -1028,8 +1028,11 @@ class DiskCleanupProfessional:
         
         # NEW: Category dropdown variable
         self.category_filter_var = tk.StringVar(value="All Categories")
+        self.group_mode_var = tk.StringVar(value="Folder")
         
-        # Statistics
+        # Grouped tree state
+        self.group_children = {}
+        self.file_group = {}
         self.stats = {
             'total_files': 0,
             'total_size': 0,
@@ -1327,7 +1330,19 @@ class DiskCleanupProfessional:
         self.category_dropdown.pack(side=tk.LEFT, padx=(0, 15))
         self.category_dropdown.bind('<<ComboboxSelected>>', lambda e: self.apply_filters())
         
-        # Row 3: Smart selection buttons
+        ttk.Label(row2, text="Group by:").pack(side=tk.LEFT, padx=(0, 5))
+        self.group_mode_dropdown = ttk.Combobox(
+            row2, textvariable=self.group_mode_var,
+            values=["Folder", "Category", "None (flat)"],
+            state="readonly", width=14
+        )
+        self.group_mode_dropdown.pack(side=tk.LEFT, padx=(0, 15))
+        self.group_mode_dropdown.bind('<<ComboboxSelected>>', lambda e: self.apply_filters())
+        
+        ttk.Button(row2, text="Expand All",
+                  command=self._expand_all_groups, width=10).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(row2, text="Collapse All",
+                  command=self._collapse_all_groups, width=11).pack(side=tk.LEFT)
         row3 = ttk.Frame(control_frame)
         row3.pack(fill=tk.X, pady=(0, 10))
         
@@ -1810,14 +1825,17 @@ class DiskCleanupProfessional:
         table_frame = ttk.LabelFrame(parent, text="Scan Results (Click column headers to sort)", padding="10")
         table_frame.pack(fill=tk.BOTH, expand=True)
         
-        # Create treeview
+        # Create treeview (tree + headings for collapsible groups)
         columns = ("✓", "Type", "Size", "Age", "Category", "Safety", "Action", "Path")
-        self.tree = ttk.Treeview(table_frame, columns=columns, show="headings", selectmode="none")
+        self.tree = ttk.Treeview(table_frame, columns=columns, show="tree headings", selectmode="none")
         
         # Configure columns with sorting
         widths = [40, 40, 80, 60, 120, 80, 120, 800]
         self.sort_column = "Size"
-        self.sort_reverse = True  # Start with largest first
+        self.sort_reverse = True
+        
+        self.tree.heading("#0", text="Name / Group", command=lambda: self.sort_by_column("Path"))
+        self.tree.column("#0", width=280, stretch=True)
         
         for col, width in zip(columns, widths):
             self.tree.heading(col, text=col, command=lambda c=col: self.sort_by_column(c))
@@ -2152,38 +2170,52 @@ class DiskCleanupProfessional:
             self.scan_queue.put(('error', str(e)))
     
     def _upsert_result_row(self, result):
-        """Insert or update a result row without duplicate-iid crashes."""
+        """Insert or update a result row without duplicate-iid crashes (flat during scan)."""
         iid = result['path']
         self.all_records[iid] = result
-        
-        if not result['safe']:
-            safety = "🔴"
-            color = 'danger'
-        elif "Safe" in result['action']:
-            safety = "🟢"
-            color = 'safe'
-        elif "Review" in result['action']:
-            safety = "🟡"
-            color = 'warning'
-        else:
-            safety = "⚪"
-            color = 'neutral'
-        
-        values = (
-            "☐",
-            result.get('icon', '📄'),
-            result['size_display'],
-            f"{result['age_days']}d",
-            result['category'],
-            safety,
-            result['action'],
-            result['path']
-        )
+        values = self._file_row_values(result)
+        basename = os.path.basename(result['path'])
         
         if self.tree.exists(iid):
-            self.tree.item(iid, values=values)
+            self.tree.item(iid, text=basename, values=values)
         else:
-            self.tree.insert("", "end", iid=iid, values=values)
+            self.tree.insert("", "end", iid=iid, text=basename, values=values)
+        
+        self._apply_row_tags(iid, result)
+    
+    def _safety_display(self, rec):
+        """Return safety emoji for a record."""
+        if not rec['safe']:
+            return "🔴"
+        if "Safe" in rec['action']:
+            return "🟢"
+        if "Review" in rec['action']:
+            return "🟡"
+        return "⚪"
+    
+    def _file_row_values(self, rec):
+        """Build tree row values for a file record."""
+        return (
+            "☑" if rec.get('checked') else "☐",
+            rec.get('icon', '📄'),
+            rec['size_display'],
+            f"{rec['age_days']}d",
+            rec['category'],
+            self._safety_display(rec),
+            rec['action'],
+            rec['path']
+        )
+    
+    def _apply_row_tags(self, iid, rec):
+        """Apply color tags to a file row."""
+        if not rec['safe']:
+            color = 'danger'
+        elif "Safe" in rec['action']:
+            color = 'safe'
+        elif "Review" in rec['action']:
+            color = 'warning'
+        else:
+            color = 'neutral'
         
         if color == 'danger':
             self.tree.tag_configure('danger', foreground=self.colors['danger'])
@@ -2194,6 +2226,204 @@ class DiskCleanupProfessional:
         elif color == 'safe':
             self.tree.tag_configure('safe', foreground=self.colors['safe'])
             self.tree.item(iid, tags=('safe',))
+    
+    def _group_iid(self, mode, key):
+        """Stable group row id."""
+        safe_key = str(key).replace('\0', '')
+        return f"GROUP::{mode}::{safe_key}"
+    
+    def _group_checkbox_glyph(self, child_iids):
+        """Tri-state checkbox for group headers."""
+        if not child_iids:
+            return "☐"
+        checked = sum(
+            1 for iid in child_iids
+            if self.all_records.get(iid, {}).get('checked')
+        )
+        if checked == 0:
+            return "☐"
+        if checked == len(child_iids):
+            return "☑"
+        return "◪"
+    
+    def _refresh_group_glyph(self, group_iid):
+        """Update a group header checkbox from its children."""
+        if group_iid not in self.group_children or not self.tree.exists(group_iid):
+            return
+        glyph = self._group_checkbox_glyph(self.group_children[group_iid])
+        self.tree.set(group_iid, "✓", glyph)
+    
+    def _refresh_all_glyphs(self):
+        """Sync every file and group checkbox glyph with all_records."""
+        for iid, rec in self.all_records.items():
+            if self.tree.exists(iid):
+                self.tree.set(iid, "✓", "☑" if rec.get('checked') else "☐")
+        for group_iid in self.group_children:
+            self._refresh_group_glyph(group_iid)
+    
+    def _record_passes_filters(self, rec):
+        """Return True if record passes current view filters."""
+        search_text = self.search_var.get().lower()
+        selected_category = self.category_filter_var.get()
+        
+        if search_text and search_text not in rec['path'].lower():
+            return False
+        if selected_category != "All Categories" and rec['category'] != selected_category:
+            return False
+        if rec['safe'] and not self.safe_var.get():
+            return False
+        if "Review" in rec['action'] and not self.warning_var.get():
+            return False
+        if not rec['safe'] and not self.danger_var.get():
+            return False
+        return True
+    
+    def _get_filtered_records(self):
+        """Return (iid, rec) pairs matching current filters."""
+        filtered = []
+        for iid, rec in self.all_records.items():
+            if self._record_passes_filters(rec):
+                filtered.append((iid, rec))
+        return filtered
+    
+    def _sort_key_for_record(self, rec, column):
+        """Sort key for a record given a column name."""
+        if column == "Size":
+            return rec['size']
+        if column == "Age":
+            return rec['age_days']
+        if column == "Category":
+            return rec['category']
+        if column in ("Path", "#0"):
+            return rec['path'].lower()
+        if column == "Type":
+            return rec.get('icon', '')
+        if column == "Action":
+            return rec['action']
+        if column == "Safety":
+            return self._safety_display(rec)
+        return rec['size']
+    
+    def _sort_record_items(self, items):
+        """Sort (iid, rec) items by current sort column."""
+        col = self.sort_column
+        reverse = self.sort_reverse
+        
+        def key_fn(item):
+            return self._sort_key_for_record(item[1], col)
+        
+        try:
+            return sorted(items, key=key_fn, reverse=reverse)
+        except Exception:
+            return sorted(items, key=lambda x: str(key_fn(x)), reverse=reverse)
+    
+    def _insert_file_row(self, parent, iid, rec):
+        """Insert or update a file row under parent (empty parent = root)."""
+        basename = os.path.basename(rec['path'])
+        values = self._file_row_values(rec)
+        if self.tree.exists(iid):
+            self.tree.item(iid, text=basename, values=values)
+        else:
+            self.tree.insert(parent, "end", iid=iid, text=basename, values=values)
+        self._apply_row_tags(iid, rec)
+    
+    def _populate_tree(self):
+        """Rebuild results tree with optional folder/category grouping."""
+        self.group_children = {}
+        self.file_group = {}
+        
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+        
+        filtered = self._get_filtered_records()
+        group_mode = self.group_mode_var.get()
+        
+        if group_mode == "None (flat)":
+            for iid, rec in self._sort_record_items(filtered):
+                self._insert_file_row("", iid, rec)
+        else:
+            buckets = defaultdict(list)
+            for iid, rec in filtered:
+                if group_mode == "Folder":
+                    key = os.path.dirname(rec['path']) or rec['path']
+                else:
+                    key = rec['category']
+                buckets[key].append((iid, rec))
+            
+            sorted_groups = sorted(
+                buckets.items(),
+                key=lambda x: sum(r[1]['size'] for r in x[1]),
+                reverse=True
+            )
+            
+            for key, items in sorted_groups:
+                items = self._sort_record_items(items)
+                child_iids = [iid for iid, _ in items]
+                group_iid = self._group_iid(group_mode, key)
+                self.group_children[group_iid] = child_iids
+                
+                total_size = sum(r['size'] for _, r in items)
+                glyph = self._group_checkbox_glyph(child_iids)
+                icon = "📁" if group_mode == "Folder" else "🏷️"
+                label = f"{icon} {key} — {len(items):,} files, {bytes_to_readable(total_size)}"
+                
+                group_values = (
+                    glyph,
+                    icon,
+                    bytes_to_readable(total_size),
+                    "",
+                    key if group_mode == "Category" else "",
+                    "",
+                    "",
+                    key if group_mode == "Folder" else ""
+                )
+                
+                self.tree.insert("", "end", iid=group_iid, text=label, values=group_values, open=False)
+                
+                for iid, rec in items:
+                    self.file_group[iid] = group_iid
+                    self._insert_file_row(group_iid, iid, rec)
+        
+        filtered_count = len(filtered)
+        self.status_label.config(
+            text=f"Showing {filtered_count:,} of {len(self.all_records):,} files"
+        )
+        self._update_selection_stats()
+        self._update_sort_headers()
+        self.root.after(100, self.update_visualization)
+    
+    def _update_sort_headers(self):
+        """Update column headers to show sort direction."""
+        if hasattr(self, 'tree') and self.tree.winfo_exists():
+            self.tree.heading("#0", text="Name / Group" + (
+                (" ▲" if self.sort_reverse else " ▼") if self.sort_column in ("Path", "#0") else ""
+            ))
+        for col in self.tree['columns']:
+            header = col
+            if col == self.sort_column:
+                header += " ▲" if self.sort_reverse else " ▼"
+            self.tree.heading(col, text=header)
+    
+    def _expand_all_groups(self):
+        """Expand every group header in the results tree."""
+        for group_iid in self.group_children:
+            if self.tree.exists(group_iid):
+                self.tree.item(group_iid, open=True)
+    
+    def _collapse_all_groups(self):
+        """Collapse every group header in the results tree."""
+        for group_iid in self.group_children:
+            if self.tree.exists(group_iid):
+                self.tree.item(group_iid, open=False)
+    
+    def _iter_visible_file_iids(self):
+        """Yield file iids currently shown in the tree."""
+        for top in self.tree.get_children():
+            if top in self.group_children:
+                for child in self.group_children[top]:
+                    yield child
+            elif top in self.all_records:
+                yield top
     
     def _poll_queue(self):
         """Poll the queue for updates."""
@@ -2306,33 +2536,51 @@ class DiskCleanupProfessional:
     # SELECTION AND FILTERING - UPDATED WITH DROPDOWN
     # ============================================
     def toggle_check(self, event):
-        """Toggle checkbox for a row."""
+        """Toggle checkbox for a row or entire group."""
         row = self.tree.identify_row(event.y)
         col = self.tree.identify_column(event.x)
         
-        if row and col == "#1":  # Checkbox column
+        if not row or col != "#1":
+            return
+        
+        if row in self.group_children:
+            children = self.group_children[row]
+            any_unchecked = any(
+                not self.all_records.get(c, {}).get('checked')
+                for c in children if c in self.all_records
+            )
+            new_state = any_unchecked
+            for child in children:
+                rec = self.all_records.get(child)
+                if rec:
+                    rec['checked'] = new_state
+                    if self.tree.exists(child):
+                        self.tree.set(child, "✓", "☑" if new_state else "☐")
+            self._refresh_group_glyph(row)
+        else:
             rec = self.all_records.get(row)
             if rec:
                 rec['checked'] = not rec['checked']
                 self.tree.set(row, "✓", "☑" if rec['checked'] else "☐")
-                self._update_selection_stats()
+                if row in self.file_group:
+                    self._refresh_group_glyph(self.file_group[row])
+        
+        self._update_selection_stats()
     
     def select_all(self):
         """Select all visible items."""
-        for iid in self.tree.get_children():
+        for iid in self._iter_visible_file_iids():
             rec = self.all_records.get(iid)
             if rec:
                 rec['checked'] = True
-                self.tree.set(iid, "✓", "☑")
+        self._refresh_all_glyphs()
         self._update_selection_stats()
     
     def clear_all(self):
         """Clear all selections."""
         for iid in self.all_records:
-            rec = self.all_records[iid]
-            rec['checked'] = False
-            if iid in self.tree.get_children():
-                self.tree.set(iid, "✓", "☐")
+            self.all_records[iid]['checked'] = False
+        self._refresh_all_glyphs()
         self._update_selection_stats()
     
     def select_all_safe(self):
@@ -2342,8 +2590,7 @@ class DiskCleanupProfessional:
             if rec['safe'] and "Safe" in rec['action']:
                 rec['checked'] = True
                 count += 1
-                if iid in self.tree.get_children():
-                    self.tree.set(iid, "✓", "☑")
+        self._refresh_all_glyphs()
         self._update_selection_stats()
         self.status_label.config(text=f"Selected {count:,} safe files")
     
@@ -2355,8 +2602,7 @@ class DiskCleanupProfessional:
             if rec['size'] >= min_size_bytes and rec['safe']:
                 rec['checked'] = True
                 count += 1
-                if iid in self.tree.get_children():
-                    self.tree.set(iid, "✓", "☑")
+        self._refresh_all_glyphs()
         self._update_selection_stats()
         self.status_label.config(text=f"Selected {count:,} files larger than {min_size_mb}MB")
     
@@ -2367,8 +2613,7 @@ class DiskCleanupProfessional:
             if rec['age_days'] >= min_days and rec['safe']:
                 rec['checked'] = True
                 count += 1
-                if iid in self.tree.get_children():
-                    self.tree.set(iid, "✓", "☑")
+        self._refresh_all_glyphs()
         self._update_selection_stats()
         self.status_label.config(text=f"Selected {count:,} files older than {min_days} days")
     
@@ -2469,45 +2714,35 @@ class DiskCleanupProfessional:
     
     def sort_by_column(self, column):
         """Sort treeview by column."""
-        # Toggle sort direction if same column
+        if column == "#0":
+            column = "Path"
+        
         if self.sort_column == column:
             self.sort_reverse = not self.sort_reverse
         else:
             self.sort_column = column
             self.sort_reverse = True
         
-        # Get all items with their values
+        if self.group_mode_var.get() != "None (flat)":
+            self._populate_tree()
+            return
+        
         items = []
         for iid in self.tree.get_children():
-            values = self.tree.item(iid)['values']
             rec = self.all_records.get(iid)
             if rec:
-                # Get sort value based on column
-                col_index = list(self.tree['columns']).index(column)
-                if column == "Size":
-                    sort_value = rec['size']
-                elif column == "Age":
-                    sort_value = rec['age_days']
-                else:
-                    sort_value = values[col_index] if col_index < len(values) else ""
-                items.append((sort_value, iid, values))
+                sort_value = self._sort_key_for_record(rec, column)
+                items.append((sort_value, iid))
         
-        # Sort items
         try:
             items.sort(key=lambda x: x[0], reverse=self.sort_reverse)
-        except:
+        except Exception:
             items.sort(key=lambda x: str(x[0]), reverse=self.sort_reverse)
         
-        # Reorder in treeview
-        for sort_value, iid, values in items:
+        for _, iid in items:
             self.tree.move(iid, "", "end")
         
-        # Update column header to show sort direction
-        for col in self.tree['columns']:
-            header = col
-            if col == self.sort_column:
-                header += " ▲" if self.sort_reverse else " ▼"
-            self.tree.heading(col, text=header)
+        self._update_sort_headers()
     
     def update_visualization(self):
         """Update the disk space visualization."""
@@ -2661,61 +2896,8 @@ class DiskCleanupProfessional:
             messagebox.showerror("Import Error", f"Failed to import results:\n{str(e)}")
     
     def apply_filters(self):
-        """Apply all filters to the view."""
-        search_text = self.search_var.get().lower()
-        selected_category = self.category_filter_var.get()
-        
-        # Clear current view
-        for item in self.tree.get_children():
-            self.tree.delete(item)
-        
-        # Apply filters
-        filtered_count = 0
-        for iid, rec in self.all_records.items():
-            # Search filter
-            if search_text and search_text not in rec['path'].lower():
-                continue
-            
-            # NEW: Category dropdown filter
-            if selected_category != "All Categories" and rec['category'] != selected_category:
-                continue
-            
-            # Safety filter
-            if rec['safe'] and not self.safe_var.get():
-                continue
-            if "Review" in rec['action'] and not self.warning_var.get():
-                continue
-            if not rec['safe'] and not self.danger_var.get():
-                continue
-            
-            # Determine safety display
-            if not rec['safe']:
-                safety = "🔴"
-            elif "Safe" in rec['action']:
-                safety = "🟢"
-            elif "Review" in rec['action']:
-                safety = "🟡"
-            else:
-                safety = "⚪"
-            
-            values = (
-                "☑" if rec['checked'] else "☐",
-                rec.get('icon', '📄'),
-                rec['size_display'],
-                f"{rec['age_days']}d",
-                rec['category'],
-                safety,
-                rec['action'],
-                rec['path']
-            )
-            
-            self.tree.insert("", "end", iid=iid, values=values)
-            filtered_count += 1
-        
-        self.status_label.config(text=f"Showing {filtered_count:,} of {len(self.all_records):,} files")
-        self._update_selection_stats()
-        # Update visualization after filtering
-        self.root.after(100, self.update_visualization)
+        """Apply all filters and rebuild grouped tree view."""
+        self._populate_tree()
     
     def _update_selection_stats(self):
         """Update selection statistics."""
